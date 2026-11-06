@@ -37,3 +37,6 @@ npm-debug.log*
 
 # CodeGraph local index (rebuilt per machine with `codegraph init`)
 .codegraph/
+
+# Personal Claude Code overrides
+.claude/settings.local.json

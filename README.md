@@ -27,6 +27,31 @@ cd frontend && npm install && npm run dev   # UI on http://localhost:5173 (proxi
 
 `make help` lists all targets.
 
+### Coding agents (CodeGraph)
+
+The repository ships configuration for [CodeGraph](https://github.com/colbymchenry/codegraph), a local code index that lets coding agents look up symbols, callers and call paths instead of grepping:
+
+- `.mcp.json` registers the CodeGraph MCP server.
+- `.claude/settings.json` allows its tools and runs `codegraph prompt-hook` on every prompt in Claude Code.
+- `codegraph.json` ranks generated code and shadcn components below hand-written code.
+- `AGENTS.md` ("Navigating the code") tells agents when to use it.
+
+One-time setup per machine:
+
+```bash
+npm i -g @colbymchenry/codegraph   # CLI on PATH (or the installer from the CodeGraph README)
+codegraph telemetry off            # optional: disable anonymous usage statistics
+codegraph init                     # build the local index in .codegraph/ (gitignored)
+```
+
+Then restart Claude Code and approve the `codegraph` server when asked. The index updates itself on file changes; nothing needs re-running.
+
+Notes:
+
+- **Do not run `codegraph install`.** The agent configuration is already committed; the installer would rewrite it.
+- **Without the CLI**, Claude Code reports a failing prompt hook on every prompt. Install the CLI, or opt out locally by adding `{ "disableAllHooks": true }` to `.claude/settings.local.json` (ignored by git) and declining the MCP server.
+- If `codegraph upgrade` adds a CodeGraph block to `.claude/CLAUDE.md`, delete it; the guidance lives in `AGENTS.md`.
+
 ## API contract
 
 [`api/openapi.yaml`](api/openapi.yaml) is the single source of truth for the REST API. From it, `make openapi` generates:
