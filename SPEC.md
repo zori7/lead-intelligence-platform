@@ -194,7 +194,7 @@ Monorepo with one top-level directory per service. Packages are organized by fea
 lead-intelligence-platform/
 ├── SPEC.md
 ├── README.md
-├── AGENTS.md                     # critical coding rules (CLAUDE.md imports it)
+├── AGENTS.md                     # critical coding rules (.claude/CLAUDE.md imports it)
 ├── Makefile                      # proto, dev, test, lint, up/down shortcuts
 ├── docker-compose.yml
 ├── .env.example

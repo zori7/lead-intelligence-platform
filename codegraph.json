@@ -1,0 +1,7 @@
+{
+  "deprioritize": [
+    "backend/internal/api/openapi.gen.go",
+    "frontend/src/lib/api/gen/",
+    "frontend/src/lib/components/ui/"
+  ]
+}

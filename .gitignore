@@ -34,3 +34,6 @@ vite.config.*.timestamp-*
 # Logs
 *.log
 npm-debug.log*
+
+# CodeGraph local index (rebuilt per machine with `codegraph init`)
+.codegraph/

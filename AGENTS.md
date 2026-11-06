@@ -80,6 +80,21 @@ habit, the rule wins.
 - `contact_email` is never sent to the AI service or the LLM.
 - No secrets in the repository: `.env` is ignored; `.env.example` holds placeholders only.
 
+## Navigating the code
+
+When a `.codegraph/` index exists at the repo root (built locally with `codegraph init`;
+not committed), use CodeGraph **before** grep/find or reading files to locate or
+understand code:
+
+- **MCP tool** (when available): `codegraph_explore` answers most code questions in one
+  call: the relevant symbols' source plus the call paths between them, including hops grep
+  cannot follow (e.g. Svelte component → TanStack Query mutation → API client). Name a
+  file or symbol in the query to read its current source.
+- **Shell** (always works): `codegraph explore "<symbol names or question>"`.
+
+Without a `.codegraph/` directory, skip CodeGraph; indexing is the developer's choice.
+`codegraph.json` ranks generated code and shadcn components below hand-written code.
+
 ## Before calling a change done
 
 ```bash
