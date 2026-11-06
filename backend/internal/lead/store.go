@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"leadintel/backend/internal/api"
 )
 
 const columns = `id, company_name, website, contact_name, contact_email, contact_title,
@@ -50,7 +52,7 @@ func (s *Store) List(ctx context.Context, p ListParams) ([]Lead, int, error) {
 
 	// Sort is an allowlisted enum; it is never interpolated from user input.
 	orderBy := "created_at DESC, id DESC"
-	if p.Sort == SortScoreDesc {
+	if p.Sort == api.SortScoreDesc {
 		orderBy = "ai_score DESC NULLS LAST, created_at DESC, id DESC"
 	}
 	query := "SELECT " + columns + " FROM leads" + whereSQL +

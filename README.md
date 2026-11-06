@@ -27,11 +27,21 @@ cd frontend && npm install && npm run dev   # UI on http://localhost:5173 (proxi
 
 `make help` lists all targets.
 
+## API contract
+
+[`api/openapi.yaml`](api/openapi.yaml) is the single source of truth for the REST API. From it, `make openapi` generates:
+
+- **Go** (`backend/internal/api`): request/response types, the chi routing interface handlers must implement, and an embedded copy of the spec that server-side validation reads its limits, enums and patterns from.
+- **TypeScript** (`frontend/src/lib/api/gen`): types and zod schemas used by the API client and forms.
+
+Generated code is committed. `make openapi-check` fails if it is out of date, and a Go contract test validates every handler response against the spec.
+
 ## Tests
 
 ```bash
 make test-go     # Go unit tests + store integration tests (creates the leadintel_test database)
 make test-web    # svelte-check
+make openapi-check  # generated API code matches api/openapi.yaml
 ```
 
 Store integration tests run against `TEST_DATABASE_URL` and are skipped when it is not set.
@@ -68,7 +78,9 @@ Errors use one envelope: `{"error": {"code": "...", "message": "...", "fields": 
 ## Repository layout
 
 ```
-backend/    Go API (cmd/api, internal/{config,db,httpx,apperr,lead}, migrations)
+backend/    Go API (cmd/api, internal/{api,config,db,httpx,apperr,lead}, migrations)
 frontend/   SvelteKit SPA
+api/        OpenAPI contract (source of truth for generated Go/TS code)
 SPEC.md     Technical specification
+AGENTS.md   Coding rules
 ```

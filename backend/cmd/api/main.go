@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
+	"leadintel/backend/internal/api"
 	"leadintel/backend/internal/config"
 	"leadintel/backend/internal/db"
 	"leadintel/backend/internal/httpx"
@@ -136,7 +137,11 @@ func newRouter(pool *pgxpool.Pool) http.Handler {
 		// (SSE) will be mounted outside this group.
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Timeout(30 * time.Second))
-			r.Route("/leads", lead.NewHandler(lead.NewStore(pool)).Routes)
+			// Routes are generated from api/openapi.yaml (internal/api).
+			api.HandlerWithOptions(lead.NewHandler(lead.NewStore(pool)), api.ChiServerOptions{
+				BaseRouter:       r,
+				ErrorHandlerFunc: httpx.ParamError,
+			})
 		})
 	})
 	return r

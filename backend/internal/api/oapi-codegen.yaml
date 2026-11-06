@@ -1,0 +1,10 @@
+# oapi-codegen config. Run via `make openapi` (go tool oapi-codegen).
+package: api
+generate:
+  models: true
+  chi-server: true
+  embedded-spec: true
+output: openapi.gen.go
+output-options:
+  # nullable + optional fields become nullable.Nullable[T] (absent / null / value).
+  nullable-type: true

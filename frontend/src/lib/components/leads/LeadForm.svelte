@@ -10,7 +10,7 @@
 	import { Textarea } from '#lib/components/ui/textarea/index.js';
 	import { ApiError } from '#lib/api/client.js';
 	import { createLeadMutation, updateLeadMutation } from '#lib/api/queries.js';
-	import { COMPANY_SIZES, LEAD_STATUSES, type Lead, type LeadInput } from '#lib/api/types.js';
+	import { COMPANY_SIZES, LEAD_STATUSES, type Lead, type LeadCreate } from '#lib/api/types.js';
 	import { validateLead, type FieldErrors, type LeadFormValues } from '#lib/schemas/lead.js';
 	import { statusLabel } from './labels.js';
 
@@ -68,7 +68,7 @@
 		errors = {};
 		try {
 			const saved = isEdit
-				? await update.mutateAsync(result.data satisfies LeadInput)
+				? await update.mutateAsync(result.data satisfies LeadCreate)
 				: await create.mutateAsync(result.data);
 			toast.success(isEdit ? 'Lead updated' : 'Lead created');
 			open = false;

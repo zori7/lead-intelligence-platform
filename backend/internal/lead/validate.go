@@ -1,97 +1,86 @@
 package lead
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
-	"net/url"
-	"regexp"
-	"slices"
-	"strconv"
-	"strings"
-	"unicode/utf8"
 
+	"github.com/oapi-codegen/nullable"
+
+	"leadintel/backend/internal/api"
 	"leadintel/backend/internal/apperr"
 )
 
-// Field limits (characters). Mirrored by DB CHECK constraints and the frontend zod schema.
-const (
-	maxCompanyName  = 200
-	maxWebsite      = 300
-	maxContactName  = 200
-	maxContactEmail = 320
-	maxContactTitle = 200
-	maxIndustry     = 100
-	maxNotes        = 5000
-
-	defaultListLimit = 50
-	maxListLimit     = 100
-)
-
-var emailRe = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
-
-// ValidateCreate normalizes and validates a create request.
-// Optional text fields are trimmed and empty strings become null.
-func ValidateCreate(req CreateRequest) (Fields, error) {
+// ValidateCreate normalizes and validates a create request. Optional text
+// fields are trimmed and empty strings become null. Limits come from the spec
+// (see rules.go).
+func ValidateCreate(req api.LeadCreate) (Fields, error) {
 	fe := apperr.Fields{}
+	r := createRules
 	f := Fields{
-		CompanyName:  companyName(fe, &req.CompanyName),
-		Website:      website(fe, req.Website),
-		ContactName:  text(fe, "contact_name", req.ContactName, maxContactName),
-		ContactEmail: email(fe, req.ContactEmail),
-		ContactTitle: text(fe, "contact_title", req.ContactTitle, maxContactTitle),
-		Industry:     text(fe, "industry", req.Industry, maxIndustry),
-		CompanySize:  companySize(fe, req.CompanySize),
-		Notes:        text(fe, "notes", req.Notes, maxNotes),
-		Status:       StatusNew,
+		CompanyName:  r.companyName.required(fe, "company_name", req.CompanyName),
+		Website:      r.website.text(fe, "website", ptr(req.Website)),
+		ContactName:  r.contactName.text(fe, "contact_name", ptr(req.ContactName)),
+		ContactEmail: r.contactEmail.text(fe, "contact_email", ptr(req.ContactEmail)),
+		ContactTitle: r.contactTitle.text(fe, "contact_title", ptr(req.ContactTitle)),
+		Industry:     r.industry.text(fe, "industry", ptr(req.Industry)),
+		CompanySize:  ptr(req.CompanySize),
+		Notes:        r.notes.text(fe, "notes", ptr(req.Notes)),
+		Status:       api.StatusNew,
+	}
+	if f.CompanySize != nil {
+		r.companySize.oneOf(fe, "company_size", string(*f.CompanySize))
 	}
 	if req.Status != nil {
-		f.Status = status(fe, *req.Status)
+		f.Status = *req.Status
+		r.status.oneOf(fe, "status", string(f.Status))
 	}
 	return f, fe.Err()
 }
 
-// Change is a single validated column assignment for a partial update.
-type Change struct {
-	Column string
-	Value  any
-}
-
 // ValidatePatch normalizes and validates a partial update and returns the
-// column assignments to apply. Only fields present in the request appear.
-func ValidatePatch(p PatchRequest) ([]Change, error) {
+// column assignments to apply; only fields present in the request appear.
+// raw is the request body, used to reject null on fields the spec marks
+// non-nullable (the generated type cannot tell null from absent for those).
+func ValidatePatch(req api.LeadPatch, raw []byte) ([]Change, error) {
 	fe := apperr.Fields{}
+	rejectNulls(fe, raw)
+
 	var changes []Change
 	set := func(column string, v any) { changes = append(changes, Change{Column: column, Value: v}) }
+	r := createRules
 
-	if p.CompanyName.Set {
-		set("company_name", companyName(fe, p.CompanyName.Value))
+	if req.CompanyName != nil {
+		set("company_name", r.companyName.required(fe, "company_name", *req.CompanyName))
 	}
-	if p.Website.Set {
-		set("website", website(fe, p.Website.Value))
+	if req.Website.IsSpecified() {
+		set("website", r.website.text(fe, "website", ptr(req.Website)))
 	}
-	if p.ContactName.Set {
-		set("contact_name", text(fe, "contact_name", p.ContactName.Value, maxContactName))
+	if req.ContactName.IsSpecified() {
+		set("contact_name", r.contactName.text(fe, "contact_name", ptr(req.ContactName)))
 	}
-	if p.ContactEmail.Set {
-		set("contact_email", email(fe, p.ContactEmail.Value))
+	if req.ContactEmail.IsSpecified() {
+		set("contact_email", r.contactEmail.text(fe, "contact_email", ptr(req.ContactEmail)))
 	}
-	if p.ContactTitle.Set {
-		set("contact_title", text(fe, "contact_title", p.ContactTitle.Value, maxContactTitle))
+	if req.ContactTitle.IsSpecified() {
+		set("contact_title", r.contactTitle.text(fe, "contact_title", ptr(req.ContactTitle)))
 	}
-	if p.Industry.Set {
-		set("industry", text(fe, "industry", p.Industry.Value, maxIndustry))
+	if req.Industry.IsSpecified() {
+		set("industry", r.industry.text(fe, "industry", ptr(req.Industry)))
 	}
-	if p.CompanySize.Set {
-		set("company_size", companySize(fe, p.CompanySize.Value))
-	}
-	if p.Notes.Set {
-		set("notes", text(fe, "notes", p.Notes.Value, maxNotes))
-	}
-	if p.Status.Set {
-		if p.Status.Value == nil {
-			fe.Add("status", "must not be null")
-		} else {
-			set("status", status(fe, *p.Status.Value))
+	if req.CompanySize.IsSpecified() {
+		size := ptr(req.CompanySize)
+		if size != nil {
+			r.companySize.oneOf(fe, "company_size", string(*size))
 		}
+		set("company_size", size)
+	}
+	if req.Notes.IsSpecified() {
+		set("notes", r.notes.text(fe, "notes", ptr(req.Notes)))
+	}
+	if req.Status != nil {
+		r.status.oneOf(fe, "status", string(*req.Status))
+		set("status", *req.Status)
 	}
 
 	if err := fe.Err(); err != nil {
@@ -100,114 +89,57 @@ func ValidatePatch(p PatchRequest) ([]Change, error) {
 	return changes, nil
 }
 
-// ParseListParams validates the query string of GET /api/leads.
-func ParseListParams(q url.Values) (ListParams, error) {
+// ParseListParams validates the query parameters of GET /api/leads (already
+// type-converted by the generated router) against the spec's limits.
+func ParseListParams(p api.ListLeadsParams) (ListParams, error) {
 	fe := apperr.Fields{}
-	p := ListParams{
-		Query: strings.TrimSpace(q.Get("q")),
-		Sort:  SortCreatedDesc,
-		Limit: defaultListLimit,
-	}
+	lr := listParams
+	out := ListParams{Sort: api.SortCreatedDesc, Limit: lr.limitDefault}
 
-	if s := q.Get("status"); s != "" {
-		st := status(fe, Status(s))
-		p.Status = &st
+	if p.Status != nil {
+		lr.status.oneOf(fe, "status", string(*p.Status))
+		out.Status = p.Status
 	}
-	if s := q.Get("sort"); s != "" {
-		switch Sort(s) {
-		case SortCreatedDesc, SortScoreDesc:
-			p.Sort = Sort(s)
-		default:
-			fe.Add("sort", fmt.Sprintf("must be one of: %s, %s", SortCreatedDesc, SortScoreDesc))
+	if q := (fieldRule{maxLen: lr.qMaxLen}).text(fe, "q", p.Q); q != nil {
+		out.Query = *q
+	}
+	if p.Sort != nil {
+		lr.sort.oneOf(fe, "sort", string(*p.Sort))
+		out.Sort = *p.Sort
+	}
+	if p.Limit != nil {
+		if *p.Limit < lr.limitMin || *p.Limit > lr.limitMax {
+			fe.Add("limit", fmt.Sprintf("must be an integer between %d and %d", lr.limitMin, lr.limitMax))
+		}
+		out.Limit = *p.Limit
+	}
+	if p.Offset != nil {
+		if *p.Offset < lr.offsetMin {
+			fe.Add("offset", fmt.Sprintf("must be an integer of at least %d", lr.offsetMin))
+		}
+		out.Offset = *p.Offset
+	}
+	return out, fe.Err()
+}
+
+// rejectNulls flags explicit nulls on PATCH fields that the spec marks non-nullable.
+func rejectNulls(fe apperr.Fields, raw []byte) {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil {
+		return // the typed decode already accepted the body; nothing more to check
+	}
+	for field, v := range m {
+		if bytes.Equal(bytes.TrimSpace(v), []byte("null")) && !patchNullable[field] {
+			fe.Add(field, "must not be null")
 		}
 	}
-	if utf8.RuneCountInString(p.Query) > maxCompanyName {
-		fe.Add("q", fmt.Sprintf("must be at most %d characters", maxCompanyName))
-	}
-	p.Limit = intParam(fe, q, "limit", defaultListLimit, 1, maxListLimit)
-	p.Offset = intParam(fe, q, "offset", 0, 0, 1<<31-1)
-
-	return p, fe.Err()
 }
 
-func companyName(fe apperr.Fields, v *string) string {
-	s := text(fe, "company_name", v, maxCompanyName)
-	if s == nil {
-		fe.Add("company_name", "is required")
-		return ""
-	}
-	return *s
-}
-
-func website(fe apperr.Fields, v *string) *string {
-	s := text(fe, "website", v, maxWebsite)
-	if s == nil {
+// ptr converts a Nullable to a pointer: absent and null both become nil.
+func ptr[T any](n nullable.Nullable[T]) *T {
+	if !n.IsSpecified() || n.IsNull() {
 		return nil
 	}
-	u, err := url.Parse(*s)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		fe.Add("website", "must be a valid http(s) URL")
-	}
-	return s
-}
-
-func email(fe apperr.Fields, v *string) *string {
-	s := text(fe, "contact_email", v, maxContactEmail)
-	if s != nil && !emailRe.MatchString(*s) {
-		fe.Add("contact_email", "must be a valid email address")
-	}
-	return s
-}
-
-func companySize(fe apperr.Fields, v *CompanySize) *CompanySize {
-	if v == nil || *v == "" {
-		return nil
-	}
-	if !slices.Contains(CompanySizes, *v) {
-		fe.Add("company_size", "must be one of: "+join(CompanySizes))
-	}
-	return v
-}
-
-func status(fe apperr.Fields, v Status) Status {
-	if !slices.Contains(Statuses, v) {
-		fe.Add("status", "must be one of: "+join(Statuses))
-	}
-	return v
-}
-
-// text trims an optional string, maps "" to nil, and enforces a character limit.
-func text(fe apperr.Fields, field string, v *string, maxLen int) *string {
-	if v == nil {
-		return nil
-	}
-	s := strings.TrimSpace(*v)
-	if s == "" {
-		return nil
-	}
-	if utf8.RuneCountInString(s) > maxLen {
-		fe.Add(field, fmt.Sprintf("must be at most %d characters", maxLen))
-	}
-	return &s
-}
-
-func intParam(fe apperr.Fields, q url.Values, key string, def, minV, maxV int) int {
-	raw := q.Get(key)
-	if raw == "" {
-		return def
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n < minV || n > maxV {
-		fe.Add(key, fmt.Sprintf("must be an integer between %d and %d", minV, maxV))
-		return def
-	}
-	return n
-}
-
-func join[T ~string](vs []T) string {
-	ss := make([]string, len(vs))
-	for i, v := range vs {
-		ss[i] = string(v)
-	}
-	return strings.Join(ss, ", ")
+	v := n.MustGet()
+	return &v
 }

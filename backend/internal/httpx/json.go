@@ -3,6 +3,7 @@
 package httpx
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -25,22 +26,27 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 }
 
 // DecodeJSON strictly decodes a single JSON object from the request body:
-// the body is size-limited, unknown fields are rejected, and trailing data is an error.
-func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
-	dec := json.NewDecoder(r.Body)
+// the body is size-limited, unknown fields are rejected, and trailing data is
+// an error. It also returns the raw body for checks the typed value cannot
+// express (e.g. telling an explicit null from an absent field).
+func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any) ([]byte, error) {
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBodyBytes))
+	if err != nil {
+		return nil, mapDecodeError(err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 
 	if err := dec.Decode(dst); err != nil {
-		return mapDecodeError(err)
+		return nil, mapDecodeError(err)
 	}
 	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		if err != nil {
-			return mapDecodeError(err)
+			return nil, mapDecodeError(err)
 		}
-		return withMessage(ErrInvalidJSON, "Request body must contain a single JSON object.")
+		return nil, withMessage(ErrInvalidJSON, "Request body must contain a single JSON object.")
 	}
-	return nil
+	return raw, nil
 }
 
 func mapDecodeError(err error) error {

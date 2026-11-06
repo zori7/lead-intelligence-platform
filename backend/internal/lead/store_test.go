@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
+	"leadintel/backend/internal/api"
 	"leadintel/backend/internal/db"
 	"leadintel/backend/migrations"
 )
@@ -46,7 +47,7 @@ func newTestStore(t *testing.T) (*Store, *pgxpool.Pool) {
 	return NewStore(pool), pool
 }
 
-func mustCreate(t *testing.T, s *Store, req CreateRequest) Lead {
+func mustCreate(t *testing.T, s *Store, req api.LeadCreate) Lead {
 	t.Helper()
 	f, err := ValidateCreate(req)
 	if err != nil {
@@ -63,8 +64,8 @@ func TestStoreCRUD(t *testing.T) {
 	s, _ := newTestStore(t)
 	ctx := context.Background()
 
-	created := mustCreate(t, s, CreateRequest{CompanyName: "Acme", Industry: ptr("SaaS")})
-	if created.Status != StatusNew || created.ID == uuid.Nil || created.CreatedAt.IsZero() {
+	created := mustCreate(t, s, api.LeadCreate{CompanyName: "Acme", Industry: val("SaaS")})
+	if created.Status != api.StatusNew || created.ID == uuid.Nil || created.CreatedAt.IsZero() {
 		t.Fatalf("unexpected created lead: %+v", created)
 	}
 
@@ -73,10 +74,10 @@ func TestStoreCRUD(t *testing.T) {
 		t.Fatalf("get: %+v, %v", got, err)
 	}
 
-	changes, err := ValidatePatch(PatchRequest{
-		Status:   Optional[Status]{Set: true, Value: ptr(StatusQualified)},
-		Industry: Optional[string]{Set: true}, // clear
-	})
+	changes, err := ValidatePatch(api.LeadPatch{
+		Status:   ptrTo(api.StatusQualified),
+		Industry: null[string](), // clear
+	}, []byte(`{"status":"qualified","industry":null}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +85,7 @@ func TestStoreCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Status != StatusQualified || updated.Industry != nil || !updated.UpdatedAt.After(created.UpdatedAt) {
+	if updated.Status != api.StatusQualified || updated.Industry != nil || !updated.UpdatedAt.After(created.UpdatedAt) {
 		t.Fatalf("update: %+v", updated)
 	}
 
@@ -106,10 +107,10 @@ func TestStoreList(t *testing.T) {
 	s, pool := newTestStore(t)
 	ctx := context.Background()
 
-	mustCreate(t, s, CreateRequest{CompanyName: "Acme Corp", ContactName: ptr("Ann Lee")})
-	mustCreate(t, s, CreateRequest{CompanyName: "Globex", Status: ptr(StatusWon)})
-	mustCreate(t, s, CreateRequest{CompanyName: "100% Organic"})
-	scored := mustCreate(t, s, CreateRequest{CompanyName: "Initech"})
+	mustCreate(t, s, api.LeadCreate{CompanyName: "Acme Corp", ContactName: val("Ann Lee")})
+	mustCreate(t, s, api.LeadCreate{CompanyName: "Globex", Status: ptrTo(api.StatusWon)})
+	mustCreate(t, s, api.LeadCreate{CompanyName: "100% Organic"})
+	scored := mustCreate(t, s, api.LeadCreate{CompanyName: "Initech"})
 	if _, err := pool.Exec(ctx, "UPDATE leads SET ai_score = 90 WHERE id = $1", scored.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -120,13 +121,13 @@ func TestStoreList(t *testing.T) {
 		wantTotal int
 		wantFirst string
 	}{
-		{"all, newest first", ListParams{Sort: SortCreatedDesc, Limit: 50}, 4, "Initech"},
-		{"by status", ListParams{Status: ptr(StatusWon), Sort: SortCreatedDesc, Limit: 50}, 1, "Globex"},
-		{"search company", ListParams{Query: "acme", Sort: SortCreatedDesc, Limit: 50}, 1, "Acme Corp"},
-		{"search contact", ListParams{Query: "ann", Sort: SortCreatedDesc, Limit: 50}, 1, "Acme Corp"},
-		{"wildcards are literal", ListParams{Query: "%", Sort: SortCreatedDesc, Limit: 50}, 1, "100% Organic"},
-		{"score sort", ListParams{Sort: SortScoreDesc, Limit: 50}, 4, "Initech"},
-		{"pagination keeps total", ListParams{Sort: SortCreatedDesc, Limit: 1, Offset: 1}, 4, "100% Organic"},
+		{"all, newest first", ListParams{Sort: api.SortCreatedDesc, Limit: 50}, 4, "Initech"},
+		{"by status", ListParams{Status: ptrTo(api.StatusWon), Sort: api.SortCreatedDesc, Limit: 50}, 1, "Globex"},
+		{"search company", ListParams{Query: "acme", Sort: api.SortCreatedDesc, Limit: 50}, 1, "Acme Corp"},
+		{"search contact", ListParams{Query: "ann", Sort: api.SortCreatedDesc, Limit: 50}, 1, "Acme Corp"},
+		{"wildcards are literal", ListParams{Query: "%", Sort: api.SortCreatedDesc, Limit: 50}, 1, "100% Organic"},
+		{"score sort", ListParams{Sort: api.SortScoreDesc, Limit: 50}, 4, "Initech"},
+		{"pagination keeps total", ListParams{Sort: api.SortCreatedDesc, Limit: 1, Offset: 1}, 4, "100% Organic"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

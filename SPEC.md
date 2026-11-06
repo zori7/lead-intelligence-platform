@@ -194,11 +194,14 @@ Monorepo with one top-level directory per service. Packages are organized by fea
 lead-intelligence-platform/
 ├── SPEC.md
 ├── README.md
+├── AGENTS.md                     # critical coding rules (CLAUDE.md imports it)
 ├── Makefile                      # proto, dev, test, lint, up/down shortcuts
 ├── docker-compose.yml
 ├── .env.example
 ├── buf.yaml                      # buf module config (lint + breaking)
 ├── buf.gen.yaml                  # codegen → backend/gen, ai/src/lead_ai/gen
+├── api/
+│   └── openapi.yaml              # REST contract: source of truth for Go + TS types and validation rules
 ├── proto/
 │   └── leadintel/analysis/v1/analysis.proto
 │
@@ -213,8 +216,9 @@ lead-intelligence-platform/
 │   ├── gen/analysis/v1/          # generated protobuf + gRPC (committed)
 │   └── internal/
 │       ├── config/config.go      # env parsing + validation
+│       ├── api/                  # generated from api/openapi.yaml: types, chi ServerInterface, embedded spec (committed)
 │       ├── httpx/                # JSON encode/decode, error envelope, middleware (incl. RequireAdmin)
-│       ├── lead/                 # model.go, store.go, handler.go, validate.go, *_test.go
+│       ├── lead/                 # model.go, store.go, handler.go, validate.go, rules.go (limits from spec), *_test.go
 │       ├── analysis/
 │       │   ├── model.go          # Job, JobStatus, Step, Event types
 │       │   ├── store.go          # create/claim/progress/complete/fail/cancel/recover
@@ -274,11 +278,12 @@ lead-intelligence-platform/
         │       └── +page.svelte      # LLM model settings
         └── lib/
             ├── api/
-            │   ├── types.ts      # API DTO types (mirror of §7)
+            │   ├── gen/          # generated from api/openapi.yaml: types.gen.ts, zod.gen.ts (committed)
+            │   ├── types.ts      # re-exports generated types + frontend-only types
             │   ├── client.ts     # typed fetch wrapper + ApiError
             │   ├── queries.ts    # TanStack Query keys, query + mutation factories
             │   └── live-analysis.ts  # SSE subscription → writes into the query cache
-            ├── schemas/{lead,llm-settings}.ts   # zod schemas (mirror server rules)
+            ├── schemas/{lead,llm-settings}.ts   # form adapters over the generated zod schemas
             ├── admin-token.ts    # get/set/clear admin token (sessionStorage, try/catch)
             ├── motion/
             │   ├── gsap.ts       # gsap setup, defaults, reduced-motion
@@ -297,9 +302,9 @@ lead-intelligence-platform/
 
 | Service | Runtime dependencies |
 |---|---|
-| Go | `go-chi/chi/v5`, `jackc/pgx/v5`, `google.golang.org/grpc`, `google.golang.org/protobuf`, `pressly/goose/v3`, `google/uuid` (+ stdlib `log/slog`) |
+| Go | `go-chi/chi/v5`, `jackc/pgx/v5`, `google.golang.org/grpc`, `google.golang.org/protobuf`, `pressly/goose/v3`, `google/uuid`, `oapi-codegen/runtime`, `oapi-codegen/nullable`, `getkin/kin-openapi` (+ stdlib `log/slog`; tool: `oapi-codegen`) |
 | Python | `grpcio`, `grpcio-health-checking`, `protobuf`, `langgraph`, `langchain-openai`, `langchain-core`, `pydantic`, `pydantic-settings` |
-| Frontend | `svelte`, `@sveltejs/kit`, `@sveltejs/adapter-static`, `@tanstack/svelte-query`, `tailwindcss` + `@tailwindcss/vite`, shadcn-svelte (copied components on `bits-ui`, `tailwind-variants`, `clsx`, `tailwind-merge`), `@lucide/svelte`, `svelte-sonner`, `zod`, `gsap` (dev: `vite`, `typescript`, `svelte-check`, `vitest`, `prettier-plugin-tailwindcss`) |
+| Frontend | `svelte`, `@sveltejs/kit`, `@sveltejs/adapter-static`, `@tanstack/svelte-query`, `tailwindcss` + `@tailwindcss/vite`, shadcn-svelte (copied components on `bits-ui`, `tailwind-variants`, `clsx`, `tailwind-merge`), `@lucide/svelte`, `svelte-sonner`, `zod`, `gsap` (dev: `vite`, `typescript`, `svelte-check`, `vitest`, `prettier-plugin-tailwindcss`, `@hey-api/openapi-ts`) |
 
 Each frontend library has a specific job:
 
@@ -458,6 +463,8 @@ stateDiagram-v2
 ## 7. REST API
 
 Base path `/api`. JSON over UTF-8. Timestamps are RFC 3339 UTC. IDs are UUID strings. Fields are `snake_case`.
+
+**Contract source of truth:** [`api/openapi.yaml`](api/openapi.yaml). Go types and the chi routing interface, TypeScript types and zod schemas are generated from it (`make openapi`). Go reads field limits, enums and patterns from the embedded spec at startup, and a contract test validates every handler response against it. The types below summarize the contract; when they differ, the spec wins.
 
 ### 7.1 Conventions
 
@@ -1209,6 +1216,7 @@ cd frontend && npm run dev                # :5173, Vite proxies /api → :8080
 # Running ai on the host instead? Use LLM_BASE_URL=http://localhost:<port>/v1
 
 make proto      # buf generate → backend/gen + ai/src/lead_ai/gen
+make openapi    # api/openapi.yaml → backend/internal/api + frontend/src/lib/api/gen
 make test       # go test ./... · uv run pytest · npm run check && npm test
 make lint       # go vet + staticcheck · ruff · svelte-check · buf lint
 ```
@@ -1576,6 +1584,7 @@ Every milestone ends in a runnable, demonstrable state.
 
 | Decision | Alternative | Why |
 |---|---|---|
+| OpenAPI-first REST contract with codegen on both sides | Hand-synced Go structs, TS types and zod; a shared package (impossible across languages) | One file defines shapes, enums, lengths and patterns. Go and TS types are generated, server validation reads the spec, and a contract test checks responses, so the browser and server cannot drift silently. Mirrors the proto-first approach used for Go ↔ Python. |
 | Hand-written pgx SQL | `sqlc`, GORM | Three small tables. Plain SQL is readable and has no codegen step. `sqlc` is a good upgrade if queries grow. |
 | Deterministic final score | LLM produces the score | Explainable, testable, stable. The LLM only judges sub-dimensions. |
 | Results as JSONB | Normalized result tables | Results are read whole and never queried by inner fields. Only the score is denormalized onto `leads` for sorting. |

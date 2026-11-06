@@ -24,6 +24,7 @@ var (
 	ErrInvalidJSON     = &Error{Status: http.StatusBadRequest, Code: "invalid_json", Message: "Request body is not valid JSON."}
 	ErrPayloadTooLarge = &Error{Status: http.StatusRequestEntityTooLarge, Code: "payload_too_large", Message: "Request body is too large."}
 	ErrNotFoundRoute   = &Error{Status: http.StatusNotFound, Code: "not_found", Message: "Resource not found."}
+	ErrInvalidRequest  = &Error{Status: http.StatusBadRequest, Code: "validation_failed", Message: "Request validation failed."}
 	errInternal        = &Error{Status: http.StatusInternalServerError, Code: "internal", Message: "Internal server error."}
 )
 

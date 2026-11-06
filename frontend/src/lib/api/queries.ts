@@ -1,6 +1,6 @@
 import { keepPreviousData, queryOptions, type QueryClient } from '@tanstack/svelte-query';
 import { ApiError, api } from './client.js';
-import type { Lead, LeadDetail, LeadFilters, LeadInput, LeadPatch, LeadStatus } from './types.js';
+import type { Lead, LeadDetail, LeadFilters, LeadCreate, LeadPatch, LeadStatus } from './types.js';
 
 export const keys = {
 	leads: ['leads'] as const,
@@ -25,7 +25,7 @@ export const leadQuery = (id: string) =>
 	});
 
 export const createLeadMutation = (qc: QueryClient) => ({
-	mutationFn: (input: LeadInput) => api.createLead(input),
+	mutationFn: (input: LeadCreate) => api.createLead(input),
 	onSuccess: () => qc.invalidateQueries({ queryKey: keys.leads })
 });
 

@@ -2,14 +2,18 @@ package lead
 
 import (
 	"errors"
-	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/oapi-codegen/nullable"
+
+	"leadintel/backend/internal/api"
 	"leadintel/backend/internal/apperr"
 )
 
-func ptr[T any](v T) *T { return &v }
+func ptrTo[T any](v T) *T                 { return &v }
+func val[T any](v T) nullable.Nullable[T] { return nullable.NewNullableWithValue(v) }
+func null[T any]() nullable.Nullable[T]   { return nullable.NewNullNullable[T]() }
 
 func fieldErrors(t *testing.T, err error) map[string]string {
 	t.Helper()
@@ -26,27 +30,28 @@ func fieldErrors(t *testing.T, err error) map[string]string {
 func TestValidateCreate(t *testing.T) {
 	tests := []struct {
 		name      string
-		req       CreateRequest
+		req       api.LeadCreate
 		wantField string // "" means valid
 	}{
-		{"minimal", CreateRequest{CompanyName: "Acme"}, ""},
-		{"full", CreateRequest{
-			CompanyName: "Acme", Website: ptr("https://acme.io"), ContactName: ptr("Ann"),
-			ContactEmail: ptr("ann@acme.io"), ContactTitle: ptr("CTO"), Industry: ptr("SaaS"),
-			CompanySize: ptr(CompanySize("51-200")), Notes: ptr("Warm intro"), Status: ptr(StatusQualified),
+		{"minimal", api.LeadCreate{CompanyName: "Acme"}, ""},
+		{"full", api.LeadCreate{
+			CompanyName: "Acme", Website: val("https://acme.io"), ContactName: val("Ann"),
+			ContactEmail: val("ann@acme.io"), ContactTitle: val("CTO"), Industry: val("SaaS"),
+			CompanySize: val(api.Size51To200), Notes: val("Warm intro"), Status: ptrTo(api.StatusQualified),
 		}, ""},
-		{"missing company", CreateRequest{}, "company_name"},
-		{"blank company", CreateRequest{CompanyName: "   "}, "company_name"},
-		{"company too long", CreateRequest{CompanyName: strings.Repeat("a", 201)}, "company_name"},
-		{"company at limit (multibyte)", CreateRequest{CompanyName: strings.Repeat("ä", 200)}, ""},
-		{"website without scheme", CreateRequest{CompanyName: "A", Website: ptr("acme.io")}, "website"},
-		{"website ftp", CreateRequest{CompanyName: "A", Website: ptr("ftp://acme.io")}, "website"},
-		{"website too long", CreateRequest{CompanyName: "A", Website: ptr("https://a.io/" + strings.Repeat("x", 300))}, "website"},
-		{"bad email", CreateRequest{CompanyName: "A", ContactEmail: ptr("ann@")}, "contact_email"},
-		{"bad company size", CreateRequest{CompanyName: "A", CompanySize: ptr(CompanySize("huge"))}, "company_size"},
-		{"bad status", CreateRequest{CompanyName: "A", Status: ptr(Status("archived"))}, "status"},
-		{"notes too long", CreateRequest{CompanyName: "A", Notes: ptr(strings.Repeat("n", 5001))}, "notes"},
-		{"industry too long", CreateRequest{CompanyName: "A", Industry: ptr(strings.Repeat("i", 101))}, "industry"},
+		{"explicit nulls", api.LeadCreate{CompanyName: "A", Website: null[string](), CompanySize: null[api.CompanySize]()}, ""},
+		{"missing company", api.LeadCreate{}, "company_name"},
+		{"blank company", api.LeadCreate{CompanyName: "   "}, "company_name"},
+		{"company too long", api.LeadCreate{CompanyName: strings.Repeat("a", 201)}, "company_name"},
+		{"company at limit (multibyte)", api.LeadCreate{CompanyName: strings.Repeat("ä", 200)}, ""},
+		{"website without scheme", api.LeadCreate{CompanyName: "A", Website: val("acme.io")}, "website"},
+		{"website ftp", api.LeadCreate{CompanyName: "A", Website: val("ftp://acme.io")}, "website"},
+		{"website too long", api.LeadCreate{CompanyName: "A", Website: val("https://a.io/" + strings.Repeat("x", 300))}, "website"},
+		{"bad email", api.LeadCreate{CompanyName: "A", ContactEmail: val("ann@")}, "contact_email"},
+		{"bad company size", api.LeadCreate{CompanyName: "A", CompanySize: val(api.CompanySize("huge"))}, "company_size"},
+		{"bad status", api.LeadCreate{CompanyName: "A", Status: ptrTo(api.LeadStatus("archived"))}, "status"},
+		{"notes too long", api.LeadCreate{CompanyName: "A", Notes: val(strings.Repeat("n", 5001))}, "notes"},
+		{"industry too long", api.LeadCreate{CompanyName: "A", Industry: val(strings.Repeat("i", 101))}, "industry"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -65,8 +70,16 @@ func TestValidateCreate(t *testing.T) {
 	}
 }
 
+func TestValidateCreateMessagesComeFromSpec(t *testing.T) {
+	_, err := ValidateCreate(api.LeadCreate{CompanyName: "A", ContactEmail: val("nope"), Website: val("nope")})
+	fields := fieldErrors(t, err)
+	if fields["contact_email"] != "must be a valid email address" || fields["website"] != "must be a valid http(s) URL" {
+		t.Fatalf("x-pattern-message not applied: %v", fields)
+	}
+}
+
 func TestValidateCreateNormalizes(t *testing.T) {
-	f, err := ValidateCreate(CreateRequest{CompanyName: "  Acme  ", Industry: ptr("  "), Website: ptr(" https://acme.io ")})
+	f, err := ValidateCreate(api.LeadCreate{CompanyName: "  Acme  ", Industry: val("  "), Website: val(" https://acme.io ")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +92,7 @@ func TestValidateCreateNormalizes(t *testing.T) {
 	if f.Website == nil || *f.Website != "https://acme.io" {
 		t.Errorf("website not trimmed: %v", f.Website)
 	}
-	if f.Status != StatusNew {
+	if f.Status != api.StatusNew {
 		t.Errorf("default status = %q, want new", f.Status)
 	}
 }
@@ -87,21 +100,23 @@ func TestValidateCreateNormalizes(t *testing.T) {
 func TestValidatePatch(t *testing.T) {
 	tests := []struct {
 		name        string
-		req         PatchRequest
+		req         api.LeadPatch
+		raw         string
 		wantField   string
 		wantColumns []string
 	}{
-		{"empty", PatchRequest{}, "", nil},
-		{"status only", PatchRequest{Status: Optional[Status]{Set: true, Value: ptr(StatusWon)}}, "", []string{"status"}},
-		{"clear website", PatchRequest{Website: Optional[string]{Set: true}}, "", []string{"website"}},
-		{"null status", PatchRequest{Status: Optional[Status]{Set: true}}, "status", nil},
-		{"invalid status", PatchRequest{Status: Optional[Status]{Set: true, Value: ptr(Status("x"))}}, "status", nil},
-		{"null company", PatchRequest{CompanyName: Optional[string]{Set: true}}, "company_name", nil},
-		{"bad email", PatchRequest{ContactEmail: Optional[string]{Set: true, Value: ptr("nope")}}, "contact_email", nil},
+		{"empty", api.LeadPatch{}, `{}`, "", nil},
+		{"status only", api.LeadPatch{Status: ptrTo(api.StatusWon)}, `{"status":"won"}`, "", []string{"status"}},
+		{"clear website", api.LeadPatch{Website: null[string]()}, `{"website":null}`, "", []string{"website"}},
+		{"null status", api.LeadPatch{}, `{"status":null}`, "status", nil},
+		{"null company", api.LeadPatch{}, `{"company_name":null}`, "company_name", nil},
+		{"invalid status", api.LeadPatch{Status: ptrTo(api.LeadStatus("x"))}, `{"status":"x"}`, "status", nil},
+		{"blank company", api.LeadPatch{CompanyName: ptrTo(" ")}, `{"company_name":" "}`, "company_name", nil},
+		{"bad email", api.LeadPatch{ContactEmail: val("nope")}, `{"contact_email":"nope"}`, "contact_email", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			changes, err := ValidatePatch(tt.req)
+			changes, err := ValidatePatch(tt.req, []byte(tt.raw))
 			fields := fieldErrors(t, err)
 			if tt.wantField != "" {
 				if _, ok := fields[tt.wantField]; !ok {
@@ -125,28 +140,31 @@ func TestValidatePatch(t *testing.T) {
 
 func TestParseListParams(t *testing.T) {
 	tests := []struct {
-		query     string
+		name      string
+		params    api.ListLeadsParams
 		wantField string
 	}{
-		{"", ""},
-		{"status=won&q=acme&sort=score_desc&limit=100&offset=10", ""},
-		{"status=archived", "status"},
-		{"sort=name", "sort"},
-		{"limit=0", "limit"},
-		{"limit=101", "limit"},
-		{"limit=abc", "limit"},
-		{"offset=-1", "offset"},
+		{"defaults", api.ListLeadsParams{}, ""},
+		{"all set", api.ListLeadsParams{
+			Status: ptrTo(api.StatusWon), Q: ptrTo("acme"), Sort: ptrTo(api.SortScoreDesc),
+			Limit: ptrTo(100), Offset: ptrTo(10),
+		}, ""},
+		{"bad status", api.ListLeadsParams{Status: ptrTo(api.LeadStatus("archived"))}, "status"},
+		{"bad sort", api.ListLeadsParams{Sort: ptrTo(api.LeadSort("name"))}, "sort"},
+		{"limit zero", api.ListLeadsParams{Limit: ptrTo(0)}, "limit"},
+		{"limit too big", api.ListLeadsParams{Limit: ptrTo(101)}, "limit"},
+		{"negative offset", api.ListLeadsParams{Offset: ptrTo(-1)}, "offset"},
+		{"query too long", api.ListLeadsParams{Q: ptrTo(strings.Repeat("q", 201))}, "q"},
 	}
 	for _, tt := range tests {
-		t.Run(tt.query, func(t *testing.T) {
-			q, _ := url.ParseQuery(tt.query)
-			p, err := ParseListParams(q)
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := ParseListParams(tt.params)
 			fields := fieldErrors(t, err)
 			if tt.wantField == "" {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
-				if tt.query == "" && (p.Limit != 50 || p.Sort != SortCreatedDesc) {
+				if tt.name == "defaults" && (p.Limit != 50 || p.Sort != api.SortCreatedDesc) {
 					t.Fatalf("bad defaults: %+v", p)
 				}
 				return

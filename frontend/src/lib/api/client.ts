@@ -1,4 +1,4 @@
-import type { Lead, LeadDetail, LeadFilters, LeadInput, LeadList, LeadPatch } from './types.js';
+import type { Lead, LeadDetail, LeadFilters, LeadCreate, LeadList, LeadPatch } from './types.js';
 
 /** A non-2xx API response (or a network failure, with status 0). */
 export class ApiError extends Error {
@@ -59,7 +59,7 @@ function listQuery(f: LeadFilters): string {
 export const api = {
 	listLeads: (filters: LeadFilters) => request<LeadList>('GET', `/api/leads?${listQuery(filters)}`),
 	getLead: (id: string) => request<LeadDetail>('GET', `/api/leads/${encodeURIComponent(id)}`),
-	createLead: (input: LeadInput) => request<Lead>('POST', '/api/leads', input),
+	createLead: (input: LeadCreate) => request<Lead>('POST', '/api/leads', input),
 	updateLead: (id: string, patch: LeadPatch) =>
 		request<Lead>('PATCH', `/api/leads/${encodeURIComponent(id)}`, patch),
 	deleteLead: (id: string) => request<void>('DELETE', `/api/leads/${encodeURIComponent(id)}`)

@@ -1,0 +1,307 @@
+openapi: 3.0.3
+info:
+  title: Lead Intelligence API
+  version: 0.1.0
+  description: |
+    REST API between the browser and the Go service.
+
+    This file is the single source of truth for the HTTP contract. Generated from it:
+    - Go types, the chi server interface and the embedded spec (`backend/internal/api`)
+    - TypeScript types and zod schemas (`frontend/src/lib/api/gen`)
+
+    Go request validation reads field limits, enums and patterns from the embedded copy
+    of this spec, so a constraint changed here applies to the server and the browser alike.
+    Run `make openapi` after editing.
+
+    Conventions (SPEC.md §7.1): JSON, snake_case fields, RFC 3339 UTC timestamps, every
+    4xx/5xx response uses the `Error` envelope.
+
+servers:
+  - url: /api
+
+paths:
+  /leads:
+    get:
+      operationId: listLeads
+      summary: List leads
+      tags: [leads]
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/LeadStatus' }
+        - name: q
+          in: query
+          description: Case-insensitive substring match on company or contact name.
+          schema: { type: string, maxLength: 200 }
+        - name: sort
+          in: query
+          schema: { $ref: '#/components/schemas/LeadSort' }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: A page of leads.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LeadList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    post:
+      operationId: createLead
+      summary: Create a lead
+      tags: [leads]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LeadCreate' }
+      responses:
+        '201':
+          description: The created lead.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Lead' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+
+  /leads/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: A malformed ID is treated as unknown (404).
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getLead
+      summary: Get a lead with its latest analysis
+      tags: [leads]
+      responses:
+        '200':
+          description: The lead.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LeadDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: updateLead
+      summary: Partially update a lead
+      description: Absent fields are unchanged; `null` clears a nullable field.
+      tags: [leads]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LeadPatch' }
+      responses:
+        '200':
+          description: The updated lead.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Lead' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+    delete:
+      operationId: deleteLead
+      summary: Delete a lead
+      tags: [leads]
+      responses:
+        '204': { description: Deleted. }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  responses:
+    BadRequest:
+      description: '`invalid_json` or `validation_failed` (with per-field messages in `fields`).'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: '`not_found`'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    PayloadTooLarge:
+      description: '`payload_too_large` (body over 64 KB).'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    # ---- Enums -------------------------------------------------------------
+    LeadStatus:
+      type: string
+      enum: [new, contacted, qualified, proposal, won, lost]
+      x-enum-varnames: [StatusNew, StatusContacted, StatusQualified, StatusProposal, StatusWon, StatusLost]
+    CompanySize:
+      type: string
+      enum: ['1-10', '11-50', '51-200', '201-1000', '1000+']
+      x-enum-varnames: [Size1To10, Size11To50, Size51To200, Size201To1000, Size1000Plus]
+    Tier:
+      type: string
+      enum: [hot, warm, cold]
+      x-enum-varnames: [TierHot, TierWarm, TierCold]
+    LeadSort:
+      type: string
+      enum: [created_desc, score_desc]
+      x-enum-varnames: [SortCreatedDesc, SortScoreDesc]
+      default: created_desc
+
+    # ---- Field constraints (shared by create, patch and response) ----------
+    # Mirrored by DB CHECK constraints in backend/migrations; change both together.
+    CompanyName:
+      type: string
+      minLength: 1
+      maxLength: 200
+    Website:
+      type: string
+      nullable: true
+      maxLength: 300
+      pattern: '^https?://[^\s/?#]+[^\s]*$'
+      x-pattern-message: must be a valid http(s) URL
+    ContactName:
+      type: string
+      nullable: true
+      maxLength: 200
+    ContactEmail:
+      type: string
+      nullable: true
+      maxLength: 320
+      pattern: '^[^\s@]+@[^\s@]+\.[^\s@]+$'
+      x-pattern-message: must be a valid email address
+    ContactTitle:
+      type: string
+      nullable: true
+      maxLength: 200
+    Industry:
+      type: string
+      nullable: true
+      maxLength: 100
+    Notes:
+      type: string
+      nullable: true
+      maxLength: 5000
+      description: Free-form context fed to the AI analysis.
+    NullableCompanySize:
+      nullable: true
+      allOf:
+        - $ref: '#/components/schemas/CompanySize'
+    NullableTier:
+      nullable: true
+      allOf:
+        - $ref: '#/components/schemas/Tier'
+
+    # ---- Resources -----------------------------------------------------------
+    Lead:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - company_name
+        - website
+        - contact_name
+        - contact_email
+        - contact_title
+        - industry
+        - company_size
+        - notes
+        - status
+        - ai_score
+        - ai_tier
+        - last_analyzed_at
+        - created_at
+        - updated_at
+      properties:
+        id: { type: string, format: uuid }
+        company_name: { $ref: '#/components/schemas/CompanyName' }
+        website: { $ref: '#/components/schemas/Website' }
+        contact_name: { $ref: '#/components/schemas/ContactName' }
+        contact_email: { $ref: '#/components/schemas/ContactEmail' }
+        contact_title: { $ref: '#/components/schemas/ContactTitle' }
+        industry: { $ref: '#/components/schemas/Industry' }
+        company_size: { $ref: '#/components/schemas/NullableCompanySize' }
+        notes: { $ref: '#/components/schemas/Notes' }
+        status: { $ref: '#/components/schemas/LeadStatus' }
+        ai_score: { type: integer, minimum: 0, maximum: 100, nullable: true }
+        ai_tier: { $ref: '#/components/schemas/NullableTier' }
+        last_analyzed_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    LeadCreate:
+      type: object
+      additionalProperties: false
+      description: Optional text fields are trimmed; an empty string is stored as null.
+      required: [company_name]
+      properties:
+        company_name: { $ref: '#/components/schemas/CompanyName' }
+        website: { $ref: '#/components/schemas/Website' }
+        contact_name: { $ref: '#/components/schemas/ContactName' }
+        contact_email: { $ref: '#/components/schemas/ContactEmail' }
+        contact_title: { $ref: '#/components/schemas/ContactTitle' }
+        industry: { $ref: '#/components/schemas/Industry' }
+        company_size: { $ref: '#/components/schemas/NullableCompanySize' }
+        notes: { $ref: '#/components/schemas/Notes' }
+        status: { $ref: '#/components/schemas/LeadStatus' }
+
+    LeadPatch:
+      type: object
+      additionalProperties: false
+      description: Absent fields are unchanged; null clears a nullable field.
+      properties:
+        company_name: { $ref: '#/components/schemas/CompanyName' }
+        website: { $ref: '#/components/schemas/Website' }
+        contact_name: { $ref: '#/components/schemas/ContactName' }
+        contact_email: { $ref: '#/components/schemas/ContactEmail' }
+        contact_title: { $ref: '#/components/schemas/ContactTitle' }
+        industry: { $ref: '#/components/schemas/Industry' }
+        company_size: { $ref: '#/components/schemas/NullableCompanySize' }
+        notes: { $ref: '#/components/schemas/Notes' }
+        status: { $ref: '#/components/schemas/LeadStatus' }
+
+    LeadList:
+      type: object
+      additionalProperties: false
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Lead' }
+        total:
+          type: integer
+          description: Total matching leads, ignoring limit/offset.
+
+    LeadDetail:
+      type: object
+      additionalProperties: false
+      required: [lead, latest_analysis]
+      properties:
+        lead: { $ref: '#/components/schemas/Lead' }
+        latest_analysis:
+          type: object
+          nullable: true
+          description: The most recent analysis job; null until analyses exist (SPEC.md M2).
+
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Stable machine-readable code, e.g. `validation_failed`, `not_found`.
+            message:
+              type: string
+              description: User-safe message.
+            fields:
+              type: object
+              description: Per-field validation messages keyed by field name.
+              additionalProperties: { type: string }

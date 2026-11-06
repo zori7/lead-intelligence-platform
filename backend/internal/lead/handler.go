@@ -4,9 +4,9 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"leadintel/backend/internal/api"
 	"leadintel/backend/internal/httpx"
 )
 
@@ -19,35 +19,31 @@ type Repository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 }
 
+// Handler implements the lead operations of the generated api.ServerInterface.
+// Routing, path-parameter parsing and query-parameter type conversion are
+// generated from api/openapi.yaml; a missing or mistyped operation is a compile error.
 type Handler struct {
 	repo Repository
 }
 
-func NewHandler(repo Repository) *Handler { return &Handler{repo: repo} }
+var _ api.ServerInterface = (*Handler)(nil)
 
-// Routes mounts the lead endpoints under the given router (expected at /api/leads).
-func (h *Handler) Routes(r chi.Router) {
-	r.Get("/", h.list)
-	r.Post("/", h.create)
-	r.Get("/{id}", h.get)
-	r.Patch("/{id}", h.update)
-	r.Delete("/{id}", h.delete)
-}
+func NewHandler(repo Repository) *Handler { return &Handler{repo: repo} }
 
 type listResponse struct {
 	Items []Lead `json:"items"`
 	Total int    `json:"total"`
 }
 
-// detailResponse is the shape of GET /api/leads/{id}. latest_analysis is
-// populated once the analysis feature exists; until then it is always null.
+// detailResponse is the `LeadDetail` schema. latest_analysis is populated once
+// the analysis feature exists; until then it is always null.
 type detailResponse struct {
 	Lead           Lead `json:"lead"`
 	LatestAnalysis any  `json:"latest_analysis"`
 }
 
-func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
-	p, err := ParseListParams(r.URL.Query())
+func (h *Handler) ListLeads(w http.ResponseWriter, r *http.Request, params api.ListLeadsParams) {
+	p, err := ParseListParams(params)
 	if err != nil {
 		httpx.WriteError(w, r, err)
 		return
@@ -63,9 +59,9 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, listResponse{Items: leads, Total: total})
 }
 
-func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
-	var req CreateRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+func (h *Handler) CreateLead(w http.ResponseWriter, r *http.Request) {
+	var req api.LeadCreate
+	if _, err := httpx.DecodeJSON(w, r, &req); err != nil {
 		httpx.WriteError(w, r, err)
 		return
 	}
@@ -82,11 +78,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusCreated, l)
 }
 
-func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r)
-	if !ok {
-		return
-	}
+func (h *Handler) GetLead(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
 	l, err := h.repo.Get(r.Context(), id)
 	if err != nil {
 		httpx.WriteError(w, r, err)
@@ -95,17 +87,14 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, detailResponse{Lead: l})
 }
 
-func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r)
-	if !ok {
-		return
-	}
-	var req PatchRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+func (h *Handler) UpdateLead(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+	var req api.LeadPatch
+	raw, err := httpx.DecodeJSON(w, r, &req)
+	if err != nil {
 		httpx.WriteError(w, r, err)
 		return
 	}
-	changes, err := ValidatePatch(req)
+	changes, err := ValidatePatch(req, raw)
 	if err != nil {
 		httpx.WriteError(w, r, err)
 		return
@@ -118,24 +107,10 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, l)
 }
 
-func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r)
-	if !ok {
-		return
-	}
+func (h *Handler) DeleteLead(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
 	if err := h.repo.Delete(r.Context(), id); err != nil {
 		httpx.WriteError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// parseID treats a malformed ID like an unknown one: the resource does not exist.
-func parseID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpx.WriteError(w, r, ErrNotFound)
-		return uuid.Nil, false
-	}
-	return id, true
 }
