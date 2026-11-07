@@ -58,7 +58,7 @@ func (f *fakeRepo) Delete(ctx context.Context, id uuid.UUID) error {
 func newTestRouter(repo Repository) http.Handler {
 	r := chi.NewRouter()
 	r.Route("/api", func(r chi.Router) {
-		api.HandlerWithOptions(NewHandler(repo), api.ChiServerOptions{
+		api.HandlerWithOptions(NewHandler(repo, nil), api.ChiServerOptions{
 			BaseRouter:       r,
 			ErrorHandlerFunc: httpx.ParamError,
 		})

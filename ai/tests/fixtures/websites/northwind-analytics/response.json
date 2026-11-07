@@ -1,0 +1,11 @@
+{
+  "kind": "synthetic",
+  "description": "B2B SaaS revenue analytics vendor, strong ICP fit. Realistic markup: nav, footer, inline script and style, og: tags.",
+  "url": "https://northwind-analytics.example/",
+  "final_url": "https://northwind-analytics.example/",
+  "redirects": [],
+  "status": 200,
+  "headers": { "content-type": "text/html; charset=utf-8" },
+  "addresses": { "northwind-analytics.example": ["93.184.215.10"] },
+  "recorded_at": null
+}

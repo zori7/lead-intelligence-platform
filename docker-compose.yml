@@ -15,5 +15,22 @@ services:
       timeout: 3s
       retries: 20
 
+  ai:
+    build: ./ai
+    environment:
+      LLM_BASE_URL: ${LLM_BASE_URL:?set LLM_BASE_URL in .env}
+      LLM_API_KEY: ${LLM_API_KEY:-local}
+      LLM_STRUCTURED_OUTPUT_METHOD: ${LLM_STRUCTURED_OUTPUT_METHOD:-json_schema}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-120}
+      MAX_CONCURRENT_ANALYSES: ${MAX_CONCURRENT_ANALYSES:-4}
+      WEB_FETCH_ENABLED: ${WEB_FETCH_ENABLED:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    # Reaches an LLM server on the host (needed on Linux, harmless on macOS).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Published on localhost only, so a host-run API (make api) can reach it.
+    ports:
+      - "127.0.0.1:50051:50051"
+
 volumes:
   pgdata:

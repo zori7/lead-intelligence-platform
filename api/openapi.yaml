@@ -112,8 +112,160 @@ paths:
         '204': { description: Deleted. }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /leads/{id}/analyses:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: A malformed ID is treated as unknown (404).
+        schema: { type: string, format: uuid }
+    post:
+      operationId: triggerAnalysis
+      summary: Start an AI analysis of the lead
+      description: |
+        Idempotent: at most one analysis per lead is active. If one is queued or running,
+        it is returned with `200` instead of starting another.
+      tags: [analyses]
+      responses:
+        '202':
+          description: A new analysis job was queued.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalysisJob' }
+        '200':
+          description: An analysis is already active for this lead; that job is returned.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalysisJob' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: '`ai_not_configured`: no default model has been set on the admin page.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    get:
+      operationId: listLeadAnalyses
+      summary: Analysis history of a lead, newest first
+      tags: [analyses]
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 20, default: 10 }
+      responses:
+        '200':
+          description: The lead's analyses.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalysisJobList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /analyses/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: A malformed ID is treated as unknown (404).
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getAnalysis
+      summary: Get an analysis job
+      tags: [analyses]
+      responses:
+        '200':
+          description: The job.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalysisJob' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /config:
+    get:
+      operationId: getConfig
+      summary: Public application status for the UI
+      tags: [config]
+      responses:
+        '200':
+          description: Application status.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AppConfig' }
+
+  /admin/llm-settings:
+    get:
+      operationId: getLlmSettings
+      summary: Default and per-step LLM settings with resolved effective values
+      tags: [admin]
+      security: [{ adminToken: [] }]
+      responses:
+        '200':
+          description: Current settings.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LlmSettings' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    put:
+      operationId: putLlmSettings
+      summary: Replace all LLM settings
+      description: |
+        Full replace in one transaction. Every non-null model must be listed by the LLM
+        server; the next analysis to be claimed uses the new settings.
+      tags: [admin]
+      security: [{ adminToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LlmSettingsUpdate' }
+      responses:
+        '200':
+          description: The saved settings.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LlmSettings' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '422':
+          description: '`unknown_model`: a model is not available on the LLM server (`fields` names it).'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503': { $ref: '#/components/responses/LlmUnreachable' }
+
+  /admin/llm-models:
+    get:
+      operationId: listLlmModels
+      summary: Models available on the LLM server
+      tags: [admin]
+      security: [{ adminToken: [] }]
+      responses:
+        '200':
+          description: Model IDs, sorted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModelList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/LlmUnreachable' }
+
 components:
+  securitySchemes:
+    adminToken:
+      type: http
+      scheme: bearer
+      description: The `ADMIN_TOKEN` configured on the server. Required for every `/admin/*` route.
+
   responses:
+    Unauthorized:
+      description: '`unauthorized`: missing or wrong admin token.'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    LlmUnreachable:
+      description: '`llm_unreachable`: the LLM server could not be reached.'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
     BadRequest:
       description: '`invalid_json` or `validation_failed` (with per-field messages in `fields`).'
       content:
@@ -281,9 +433,355 @@ components:
       properties:
         lead: { $ref: '#/components/schemas/Lead' }
         latest_analysis:
-          type: object
           nullable: true
-          description: The most recent analysis job; null until analyses exist (SPEC.md M2).
+          description: The most recent analysis job; null if the lead was never analyzed.
+          allOf:
+            - $ref: '#/components/schemas/AnalysisJob'
+
+    # ---- Analyses (SPEC.md §7.2) ---------------------------------------------
+    JobStatus:
+      type: string
+      enum: [queued, running, succeeded, failed, cancelled]
+      x-enum-varnames: [JobQueued, JobRunning, JobSucceeded, JobFailed, JobCancelled]
+    StepName:
+      type: string
+      enum:
+        - validate_input
+        - fetch_website
+        - extract_company
+        - analyze_fit
+        - analyze_intent
+        - score_lead
+        - generate_recommendations
+        - aggregate
+      x-enum-varnames:
+        - StepValidateInput
+        - StepFetchWebsite
+        - StepExtractCompany
+        - StepAnalyzeFit
+        - StepAnalyzeIntent
+        - StepScoreLead
+        - StepGenerateRecommendations
+        - StepAggregate
+    StepState:
+      type: string
+      enum: [pending, running, done, skipped, failed]
+      x-enum-varnames: [StepPending, StepRunning, StepDone, StepSkipped, StepFailed]
+    LlmNode:
+      type: string
+      enum: [extract_company, analyze_fit, analyze_intent, generate_recommendations]
+      x-enum-varnames: [NodeExtractCompany, NodeAnalyzeFit, NodeAnalyzeIntent, NodeGenerateRecommendations]
+    Priority:
+      type: string
+      enum: [high, medium, low]
+      x-enum-varnames: [PriorityHigh, PriorityMedium, PriorityLow]
+    WebsiteFetchStatus:
+      type: string
+      enum: [fetched, not_provided, disabled, blocked, failed]
+      x-enum-varnames: [WebsiteFetched, WebsiteNotProvided, WebsiteDisabled, WebsiteBlocked, WebsiteFailed]
+      description: |
+        `fetched`: page text was used. `not_provided`: lead has no website. `disabled`: website
+        fetch is turned off. `blocked`: robots.txt disallows it or the address is not public.
+        `failed`: network error, timeout, non-2xx, non-HTML, or no readable text.
+
+    AnalysisStep:
+      type: object
+      additionalProperties: false
+      required: [name, state]
+      properties:
+        name: { $ref: '#/components/schemas/StepName' }
+        state: { $ref: '#/components/schemas/StepState' }
+
+    AnalysisError:
+      type: object
+      additionalProperties: false
+      required: [code, message, retryable]
+      properties:
+        code:
+          type: string
+          description: |
+            `invalid_input`, `insufficient_data`, `provider_error`, `provider_config`, `internal`,
+            `ai_unavailable`, `timeout`, `interrupted` (SPEC.md §11.1).
+        message: { type: string, description: User-safe message. }
+        retryable: { type: boolean, description: Whether the UI should offer Retry. }
+
+    AnalysisJob:
+      type: object
+      additionalProperties: false
+      required: [id, lead_id, status, steps, progress, result, error, created_at, started_at, finished_at]
+      properties:
+        id: { type: string, format: uuid }
+        lead_id: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/JobStatus' }
+        steps:
+          type: array
+          items: { $ref: '#/components/schemas/AnalysisStep' }
+        progress: { type: integer, minimum: 0, maximum: 100 }
+        result:
+          nullable: true
+          description: Present when the job succeeded.
+          allOf:
+            - $ref: '#/components/schemas/AnalysisResult'
+        error:
+          nullable: true
+          description: Present when the job failed.
+          allOf:
+            - $ref: '#/components/schemas/AnalysisError'
+        created_at: { type: string, format: date-time }
+        started_at: { type: string, format: date-time, nullable: true }
+        finished_at: { type: string, format: date-time, nullable: true }
+
+    AnalysisJobList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AnalysisJob' }
+
+    AnalysisResult:
+      type: object
+      additionalProperties: false
+      required: [summary, company, fit, intent, score, recommendations, meta]
+      properties:
+        summary: { type: string }
+        company: { $ref: '#/components/schemas/CompanyInsights' }
+        fit:
+          nullable: true
+          description: Null when the fit branch failed (`meta.partial`).
+          allOf:
+            - $ref: '#/components/schemas/FitAnalysis'
+        intent:
+          nullable: true
+          description: Null when the intent branch failed (`meta.partial`).
+          allOf:
+            - $ref: '#/components/schemas/IntentAnalysis'
+        score: { $ref: '#/components/schemas/LeadScore' }
+        recommendations:
+          type: array
+          items: { $ref: '#/components/schemas/Recommendation' }
+        meta: { $ref: '#/components/schemas/ResultMeta' }
+
+    CompanyInsights:
+      type: object
+      additionalProperties: false
+      required: [name, industry, size_estimate, business_model, description, key_needs, confidence]
+      properties:
+        name: { type: string }
+        industry: { type: string }
+        size_estimate: { type: string }
+        business_model: { type: string }
+        description: { type: string }
+        key_needs:
+          type: array
+          items: { type: string }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+
+    FitAnalysis:
+      type: object
+      additionalProperties: false
+      required: [score, rationale, matched_criteria, gaps]
+      properties:
+        score: { type: integer, minimum: 0, maximum: 100 }
+        rationale: { type: string }
+        matched_criteria:
+          type: array
+          items: { type: string }
+        gaps:
+          type: array
+          items: { type: string }
+
+    IntentAnalysis:
+      type: object
+      additionalProperties: false
+      required: [score, rationale, signals]
+      properties:
+        score: { type: integer, minimum: 0, maximum: 100 }
+        rationale: { type: string }
+        signals:
+          type: array
+          items: { type: string }
+
+    LeadScore:
+      type: object
+      additionalProperties: false
+      required: [value, tier, confidence, breakdown]
+      properties:
+        value: { type: integer, minimum: 0, maximum: 100 }
+        tier: { $ref: '#/components/schemas/Tier' }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        breakdown:
+          type: object
+          additionalProperties: false
+          required: [fit, intent]
+          properties:
+            fit: { type: integer, minimum: 0, maximum: 100, nullable: true }
+            intent: { type: integer, minimum: 0, maximum: 100, nullable: true }
+
+    Recommendation:
+      type: object
+      additionalProperties: false
+      required: [action, rationale, priority]
+      properties:
+        action: { type: string }
+        rationale: { type: string }
+        priority: { $ref: '#/components/schemas/Priority' }
+
+    WebsiteFetch:
+      type: object
+      additionalProperties: false
+      required: [status, final_url]
+      properties:
+        status: { $ref: '#/components/schemas/WebsiteFetchStatus' }
+        final_url:
+          type: string
+          nullable: true
+          description: URL after redirects; null unless `fetched`.
+
+    ResultMeta:
+      type: object
+      additionalProperties: false
+      required: [node_models, website, partial, warnings, duration_ms, input_tokens, output_tokens]
+      properties:
+        node_models:
+          type: object
+          description: Model actually used per LLM step, keyed by step name.
+          additionalProperties: { type: string }
+        website: { $ref: '#/components/schemas/WebsiteFetch' }
+        partial: { type: boolean, description: A non-critical step failed; the result is incomplete. }
+        warnings:
+          type: array
+          items: { type: string }
+        duration_ms: { type: integer, minimum: 0 }
+        input_tokens: { type: integer, minimum: 0 }
+        output_tokens: { type: integer, minimum: 0 }
+
+    # ---- Config and admin (SPEC.md §7.5) ----------------------------------------
+    AppConfig:
+      type: object
+      additionalProperties: false
+      required: [ai_configured]
+      properties:
+        ai_configured:
+          type: boolean
+          description: False until an admin sets a default model; analyses are blocked until then.
+
+    # Mirrored by DB CHECK constraints in backend/migrations; change both together.
+    ModelName:
+      type: string
+      minLength: 1
+      maxLength: 200
+    Temperature:
+      type: number
+      minimum: 0
+      maximum: 2
+
+    LlmDefaultSetting:
+      type: object
+      additionalProperties: false
+      required: [model, temperature]
+      properties:
+        model:
+          nullable: true
+          description: Null means AI is not configured yet.
+          allOf:
+            - $ref: '#/components/schemas/ModelName'
+        temperature:
+          nullable: true
+          description: Null means 0.2.
+          allOf:
+            - $ref: '#/components/schemas/Temperature'
+
+    LlmNodeSetting:
+      type: object
+      additionalProperties: false
+      required: [node, model, temperature, effective_model, effective_temperature]
+      properties:
+        node: { $ref: '#/components/schemas/LlmNode' }
+        model:
+          nullable: true
+          description: Null inherits the default.
+          allOf:
+            - $ref: '#/components/schemas/ModelName'
+        temperature:
+          nullable: true
+          description: Null inherits the default.
+          allOf:
+            - $ref: '#/components/schemas/Temperature'
+        effective_model:
+          type: string
+          nullable: true
+          description: Resolved model (read-only); null while AI is not configured.
+        effective_temperature: { $ref: '#/components/schemas/Temperature' }
+
+    LlmSettings:
+      type: object
+      additionalProperties: false
+      required: [default, nodes, configured, updated_at]
+      properties:
+        default: { $ref: '#/components/schemas/LlmDefaultSetting' }
+        nodes:
+          type: array
+          items: { $ref: '#/components/schemas/LlmNodeSetting' }
+        configured: { type: boolean }
+        updated_at: { type: string, format: date-time }
+
+    LlmDefaultUpdate:
+      type: object
+      additionalProperties: false
+      required: [model, temperature]
+      properties:
+        model: { $ref: '#/components/schemas/ModelName' }
+        temperature:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/Temperature'
+
+    LlmNodeUpdate:
+      type: object
+      additionalProperties: false
+      required: [model, temperature]
+      properties:
+        model:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/ModelName'
+        temperature:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/Temperature'
+
+    LlmSettingsUpdate:
+      type: object
+      additionalProperties: false
+      required: [default, nodes]
+      properties:
+        default: { $ref: '#/components/schemas/LlmDefaultUpdate' }
+        nodes:
+          type: object
+          additionalProperties: false
+          description: All four LLM steps, each exactly once (full replace).
+          required: [extract_company, analyze_fit, analyze_intent, generate_recommendations]
+          properties:
+            extract_company: { $ref: '#/components/schemas/LlmNodeUpdate' }
+            analyze_fit: { $ref: '#/components/schemas/LlmNodeUpdate' }
+            analyze_intent: { $ref: '#/components/schemas/LlmNodeUpdate' }
+            generate_recommendations: { $ref: '#/components/schemas/LlmNodeUpdate' }
+
+    ModelList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id]
+            properties:
+              id: { type: string }
 
     Error:
       type: object

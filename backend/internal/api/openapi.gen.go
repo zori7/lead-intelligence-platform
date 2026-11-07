@@ -49,6 +49,33 @@ func (e CompanySize) Valid() bool {
 	}
 }
 
+// Defines values for JobStatus.
+const (
+	JobCancelled JobStatus = "cancelled"
+	JobFailed    JobStatus = "failed"
+	JobQueued    JobStatus = "queued"
+	JobRunning   JobStatus = "running"
+	JobSucceeded JobStatus = "succeeded"
+)
+
+// Valid indicates whether the value is a known member of the JobStatus enum.
+func (e JobStatus) Valid() bool {
+	switch e {
+	case JobCancelled:
+		return true
+	case JobFailed:
+		return true
+	case JobQueued:
+		return true
+	case JobRunning:
+		return true
+	case JobSucceeded:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for LeadSort.
 const (
 	SortCreatedDesc LeadSort = "created_desc"
@@ -97,6 +124,114 @@ func (e LeadStatus) Valid() bool {
 	}
 }
 
+// Defines values for LlmNode.
+const (
+	NodeAnalyzeFit              LlmNode = "analyze_fit"
+	NodeAnalyzeIntent           LlmNode = "analyze_intent"
+	NodeExtractCompany          LlmNode = "extract_company"
+	NodeGenerateRecommendations LlmNode = "generate_recommendations"
+)
+
+// Valid indicates whether the value is a known member of the LlmNode enum.
+func (e LlmNode) Valid() bool {
+	switch e {
+	case NodeAnalyzeFit:
+		return true
+	case NodeAnalyzeIntent:
+		return true
+	case NodeExtractCompany:
+		return true
+	case NodeGenerateRecommendations:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for Priority.
+const (
+	PriorityHigh   Priority = "high"
+	PriorityLow    Priority = "low"
+	PriorityMedium Priority = "medium"
+)
+
+// Valid indicates whether the value is a known member of the Priority enum.
+func (e Priority) Valid() bool {
+	switch e {
+	case PriorityHigh:
+		return true
+	case PriorityLow:
+		return true
+	case PriorityMedium:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for StepName.
+const (
+	StepAggregate               StepName = "aggregate"
+	StepAnalyzeFit              StepName = "analyze_fit"
+	StepAnalyzeIntent           StepName = "analyze_intent"
+	StepExtractCompany          StepName = "extract_company"
+	StepFetchWebsite            StepName = "fetch_website"
+	StepGenerateRecommendations StepName = "generate_recommendations"
+	StepScoreLead               StepName = "score_lead"
+	StepValidateInput           StepName = "validate_input"
+)
+
+// Valid indicates whether the value is a known member of the StepName enum.
+func (e StepName) Valid() bool {
+	switch e {
+	case StepAggregate:
+		return true
+	case StepAnalyzeFit:
+		return true
+	case StepAnalyzeIntent:
+		return true
+	case StepExtractCompany:
+		return true
+	case StepFetchWebsite:
+		return true
+	case StepGenerateRecommendations:
+		return true
+	case StepScoreLead:
+		return true
+	case StepValidateInput:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for StepState.
+const (
+	StepDone    StepState = "done"
+	StepFailed  StepState = "failed"
+	StepPending StepState = "pending"
+	StepRunning StepState = "running"
+	StepSkipped StepState = "skipped"
+)
+
+// Valid indicates whether the value is a known member of the StepState enum.
+func (e StepState) Valid() bool {
+	switch e {
+	case StepDone:
+		return true
+	case StepFailed:
+		return true
+	case StepPending:
+		return true
+	case StepRunning:
+		return true
+	case StepSkipped:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for Tier.
 const (
 	TierCold Tier = "cold"
@@ -116,6 +251,107 @@ func (e Tier) Valid() bool {
 	default:
 		return false
 	}
+}
+
+// Defines values for WebsiteFetchStatus.
+const (
+	WebsiteBlocked     WebsiteFetchStatus = "blocked"
+	WebsiteDisabled    WebsiteFetchStatus = "disabled"
+	WebsiteFailed      WebsiteFetchStatus = "failed"
+	WebsiteFetched     WebsiteFetchStatus = "fetched"
+	WebsiteNotProvided WebsiteFetchStatus = "not_provided"
+)
+
+// Valid indicates whether the value is a known member of the WebsiteFetchStatus enum.
+func (e WebsiteFetchStatus) Valid() bool {
+	switch e {
+	case WebsiteBlocked:
+		return true
+	case WebsiteDisabled:
+		return true
+	case WebsiteFailed:
+		return true
+	case WebsiteFetched:
+		return true
+	case WebsiteNotProvided:
+		return true
+	default:
+		return false
+	}
+}
+
+// AnalysisError defines model for AnalysisError.
+type AnalysisError struct {
+	// Code `invalid_input`, `insufficient_data`, `provider_error`, `provider_config`, `internal`,
+	// `ai_unavailable`, `timeout`, `interrupted` (SPEC.md §11.1).
+	Code string `json:"code"`
+
+	// Message User-safe message.
+	Message string `json:"message"`
+
+	// Retryable Whether the UI should offer Retry.
+	Retryable bool `json:"retryable"`
+}
+
+// AnalysisJob defines model for AnalysisJob.
+type AnalysisJob struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// Error Present when the job failed.
+	Error      nullable.Nullable[AnalysisError] `json:"error"`
+	FinishedAt nullable.Nullable[time.Time]     `json:"finished_at"`
+	Id         openapi_types.UUID               `json:"id"`
+	LeadId     openapi_types.UUID               `json:"lead_id"`
+	Progress   int                              `json:"progress"`
+
+	// Result Present when the job succeeded.
+	Result    nullable.Nullable[AnalysisResult] `json:"result"`
+	StartedAt nullable.Nullable[time.Time]      `json:"started_at"`
+	Status    JobStatus                         `json:"status"`
+	Steps     []AnalysisStep                    `json:"steps"`
+}
+
+// AnalysisJobList defines model for AnalysisJobList.
+type AnalysisJobList struct {
+	Items []AnalysisJob `json:"items"`
+}
+
+// AnalysisResult defines model for AnalysisResult.
+type AnalysisResult struct {
+	Company CompanyInsights `json:"company"`
+
+	// Fit Null when the fit branch failed (`meta.partial`).
+	Fit nullable.Nullable[FitAnalysis] `json:"fit"`
+
+	// Intent Null when the intent branch failed (`meta.partial`).
+	Intent          nullable.Nullable[IntentAnalysis] `json:"intent"`
+	Meta            ResultMeta                        `json:"meta"`
+	Recommendations []Recommendation                  `json:"recommendations"`
+	Score           LeadScore                         `json:"score"`
+	Summary         string                            `json:"summary"`
+}
+
+// AnalysisStep defines model for AnalysisStep.
+type AnalysisStep struct {
+	Name  StepName  `json:"name"`
+	State StepState `json:"state"`
+}
+
+// AppConfig defines model for AppConfig.
+type AppConfig struct {
+	// AiConfigured False until an admin sets a default model; analyses are blocked until then.
+	AiConfigured bool `json:"ai_configured"`
+}
+
+// CompanyInsights defines model for CompanyInsights.
+type CompanyInsights struct {
+	BusinessModel string   `json:"business_model"`
+	Confidence    float32  `json:"confidence"`
+	Description   string   `json:"description"`
+	Industry      string   `json:"industry"`
+	KeyNeeds      []string `json:"key_needs"`
+	Name          string   `json:"name"`
+	SizeEstimate  string   `json:"size_estimate"`
 }
 
 // CompanyName defines model for CompanyName.
@@ -147,8 +383,26 @@ type Error struct {
 	} `json:"error"`
 }
 
+// FitAnalysis defines model for FitAnalysis.
+type FitAnalysis struct {
+	Gaps            []string `json:"gaps"`
+	MatchedCriteria []string `json:"matched_criteria"`
+	Rationale       string   `json:"rationale"`
+	Score           int      `json:"score"`
+}
+
 // Industry defines model for Industry.
 type Industry = string
+
+// IntentAnalysis defines model for IntentAnalysis.
+type IntentAnalysis struct {
+	Rationale string   `json:"rationale"`
+	Score     int      `json:"score"`
+	Signals   []string `json:"signals"`
+}
+
+// JobStatus defines model for JobStatus.
+type JobStatus string
 
 // Lead defines model for Lead.
 type Lead struct {
@@ -188,9 +442,9 @@ type LeadCreate struct {
 
 // LeadDetail defines model for LeadDetail.
 type LeadDetail struct {
-	// LatestAnalysis The most recent analysis job; null until analyses exist (SPEC.md M2).
-	LatestAnalysis nullable.Nullable[map[string]interface{}] `json:"latest_analysis"`
-	Lead           Lead                                      `json:"lead"`
+	// LatestAnalysis The most recent analysis job; null if the lead was never analyzed.
+	LatestAnalysis nullable.Nullable[AnalysisJob] `json:"latest_analysis"`
+	Lead           Lead                           `json:"lead"`
 }
 
 // LeadList defines model for LeadList.
@@ -216,11 +470,91 @@ type LeadPatch struct {
 	Website nullable.Nullable[Website] `json:"website,omitempty"`
 }
 
+// LeadScore defines model for LeadScore.
+type LeadScore struct {
+	Breakdown struct {
+		Fit    nullable.Nullable[int] `json:"fit"`
+		Intent nullable.Nullable[int] `json:"intent"`
+	} `json:"breakdown"`
+	Confidence float32 `json:"confidence"`
+	Tier       Tier    `json:"tier"`
+	Value      int     `json:"value"`
+}
+
 // LeadSort defines model for LeadSort.
 type LeadSort string
 
 // LeadStatus defines model for LeadStatus.
 type LeadStatus string
+
+// LlmDefaultSetting defines model for LlmDefaultSetting.
+type LlmDefaultSetting struct {
+	// Model Null means AI is not configured yet.
+	Model nullable.Nullable[ModelName] `json:"model"`
+
+	// Temperature Null means 0.2.
+	Temperature nullable.Nullable[Temperature] `json:"temperature"`
+}
+
+// LlmDefaultUpdate defines model for LlmDefaultUpdate.
+type LlmDefaultUpdate struct {
+	Model       ModelName                      `json:"model"`
+	Temperature nullable.Nullable[Temperature] `json:"temperature"`
+}
+
+// LlmNode defines model for LlmNode.
+type LlmNode string
+
+// LlmNodeSetting defines model for LlmNodeSetting.
+type LlmNodeSetting struct {
+	// EffectiveModel Resolved model (read-only); null while AI is not configured.
+	EffectiveModel       nullable.Nullable[string] `json:"effective_model"`
+	EffectiveTemperature Temperature               `json:"effective_temperature"`
+
+	// Model Null inherits the default.
+	Model nullable.Nullable[ModelName] `json:"model"`
+	Node  LlmNode                      `json:"node"`
+
+	// Temperature Null inherits the default.
+	Temperature nullable.Nullable[Temperature] `json:"temperature"`
+}
+
+// LlmNodeUpdate defines model for LlmNodeUpdate.
+type LlmNodeUpdate struct {
+	Model       nullable.Nullable[ModelName]   `json:"model"`
+	Temperature nullable.Nullable[Temperature] `json:"temperature"`
+}
+
+// LlmSettings defines model for LlmSettings.
+type LlmSettings struct {
+	Configured bool              `json:"configured"`
+	Default    LlmDefaultSetting `json:"default"`
+	Nodes      []LlmNodeSetting  `json:"nodes"`
+	UpdatedAt  time.Time         `json:"updated_at"`
+}
+
+// LlmSettingsUpdate defines model for LlmSettingsUpdate.
+type LlmSettingsUpdate struct {
+	Default LlmDefaultUpdate `json:"default"`
+
+	// Nodes All four LLM steps, each exactly once (full replace).
+	Nodes struct {
+		AnalyzeFit              LlmNodeUpdate `json:"analyze_fit"`
+		AnalyzeIntent           LlmNodeUpdate `json:"analyze_intent"`
+		ExtractCompany          LlmNodeUpdate `json:"extract_company"`
+		GenerateRecommendations LlmNodeUpdate `json:"generate_recommendations"`
+	} `json:"nodes"`
+}
+
+// ModelList defines model for ModelList.
+type ModelList struct {
+	Items []struct {
+		Id string `json:"id"`
+	} `json:"items"`
+}
+
+// ModelName defines model for ModelName.
+type ModelName = string
 
 // Notes Free-form context fed to the AI analysis.
 type Notes = string
@@ -231,20 +565,76 @@ type NullableCompanySize = CompanySize
 // NullableTier defines model for NullableTier.
 type NullableTier = Tier
 
+// Priority defines model for Priority.
+type Priority string
+
+// Recommendation defines model for Recommendation.
+type Recommendation struct {
+	Action    string   `json:"action"`
+	Priority  Priority `json:"priority"`
+	Rationale string   `json:"rationale"`
+}
+
+// ResultMeta defines model for ResultMeta.
+type ResultMeta struct {
+	DurationMs  int `json:"duration_ms"`
+	InputTokens int `json:"input_tokens"`
+
+	// NodeModels Model actually used per LLM step, keyed by step name.
+	NodeModels   map[string]string `json:"node_models"`
+	OutputTokens int               `json:"output_tokens"`
+
+	// Partial A non-critical step failed; the result is incomplete.
+	Partial  bool         `json:"partial"`
+	Warnings []string     `json:"warnings"`
+	Website  WebsiteFetch `json:"website"`
+}
+
+// StepName defines model for StepName.
+type StepName string
+
+// StepState defines model for StepState.
+type StepState string
+
+// Temperature defines model for Temperature.
+type Temperature = float32
+
 // Tier defines model for Tier.
 type Tier string
 
 // Website defines model for Website.
 type Website = string
 
+// WebsiteFetch defines model for WebsiteFetch.
+type WebsiteFetch struct {
+	// FinalUrl URL after redirects; null unless `fetched`.
+	FinalUrl nullable.Nullable[string] `json:"final_url"`
+
+	// Status `fetched`: page text was used. `not_provided`: lead has no website. `disabled`: website
+	// fetch is turned off. `blocked`: robots.txt disallows it or the address is not public.
+	// `failed`: network error, timeout, non-2xx, non-HTML, or no readable text.
+	Status WebsiteFetchStatus `json:"status"`
+}
+
+// WebsiteFetchStatus `fetched`: page text was used. `not_provided`: lead has no website. `disabled`: website
+// fetch is turned off. `blocked`: robots.txt disallows it or the address is not public.
+// `failed`: network error, timeout, non-2xx, non-HTML, or no readable text.
+type WebsiteFetchStatus string
+
 // BadRequest defines model for BadRequest.
 type BadRequest = Error
+
+// LlmUnreachable defines model for LlmUnreachable.
+type LlmUnreachable = Error
 
 // NotFound defines model for NotFound.
 type NotFound = Error
 
 // PayloadTooLarge defines model for PayloadTooLarge.
 type PayloadTooLarge = Error
+
+// Unauthorized defines model for Unauthorized.
+type Unauthorized = Error
 
 // ListLeadsParams defines parameters for ListLeads.
 type ListLeadsParams struct {
@@ -257,6 +647,14 @@ type ListLeadsParams struct {
 	Offset *int      `form:"offset,omitempty" json:"offset,omitempty"`
 }
 
+// ListLeadAnalysesParams defines parameters for ListLeadAnalyses.
+type ListLeadAnalysesParams struct {
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// PutLlmSettingsJSONRequestBody defines body for PutLlmSettings for application/json ContentType.
+type PutLlmSettingsJSONRequestBody = LlmSettingsUpdate
+
 // CreateLeadJSONRequestBody defines body for CreateLead for application/json ContentType.
 type CreateLeadJSONRequestBody = LeadCreate
 
@@ -265,6 +663,21 @@ type UpdateLeadJSONRequestBody = LeadPatch
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// ListLlmModels Models available on the LLM server
+	// (GET /admin/llm-models)
+	ListLlmModels(w http.ResponseWriter, r *http.Request)
+	// GetLlmSettings Default and per-step LLM settings with resolved effective values
+	// (GET /admin/llm-settings)
+	GetLlmSettings(w http.ResponseWriter, r *http.Request)
+	// PutLlmSettings Replace all LLM settings
+	// (PUT /admin/llm-settings)
+	PutLlmSettings(w http.ResponseWriter, r *http.Request)
+	// GetAnalysis Get an analysis job
+	// (GET /analyses/{id})
+	GetAnalysis(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
+	// GetConfig Public application status for the UI
+	// (GET /config)
+	GetConfig(w http.ResponseWriter, r *http.Request)
 	// ListLeads List leads
 	// (GET /leads)
 	ListLeads(w http.ResponseWriter, r *http.Request, params ListLeadsParams)
@@ -280,11 +693,47 @@ type ServerInterface interface {
 	// UpdateLead Partially update a lead
 	// (PATCH /leads/{id})
 	UpdateLead(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
+	// ListLeadAnalyses Analysis history of a lead, newest first
+	// (GET /leads/{id}/analyses)
+	ListLeadAnalyses(w http.ResponseWriter, r *http.Request, id openapi_types.UUID, params ListLeadAnalysesParams)
+	// TriggerAnalysis Start an AI analysis of the lead
+	// (POST /leads/{id}/analyses)
+	TriggerAnalysis(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
 }
 
 // Unimplemented server implementation that returns http.StatusNotImplemented for each endpoint.
 
 type Unimplemented struct{}
+
+// ListLlmModels Models available on the LLM server
+// (GET /admin/llm-models)
+func (_ Unimplemented) ListLlmModels(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// GetLlmSettings Default and per-step LLM settings with resolved effective values
+// (GET /admin/llm-settings)
+func (_ Unimplemented) GetLlmSettings(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// PutLlmSettings Replace all LLM settings
+// (PUT /admin/llm-settings)
+func (_ Unimplemented) PutLlmSettings(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// GetAnalysis Get an analysis job
+// (GET /analyses/{id})
+func (_ Unimplemented) GetAnalysis(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// GetConfig Public application status for the UI
+// (GET /config)
+func (_ Unimplemented) GetConfig(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
 
 // ListLeads List leads
 // (GET /leads)
@@ -316,6 +765,18 @@ func (_ Unimplemented) UpdateLead(w http.ResponseWriter, r *http.Request, id ope
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// ListLeadAnalyses Analysis history of a lead, newest first
+// (GET /leads/{id}/analyses)
+func (_ Unimplemented) ListLeadAnalyses(w http.ResponseWriter, r *http.Request, id openapi_types.UUID, params ListLeadAnalysesParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// TriggerAnalysis Start an AI analysis of the lead
+// (POST /leads/{id}/analyses)
+func (_ Unimplemented) TriggerAnalysis(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // ServerInterfaceWrapper converts contexts to parameters.
 type ServerInterfaceWrapper struct {
 	Handler            ServerInterface
@@ -324,6 +785,88 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// ListLlmModels operation middleware
+func (siw *ServerInterfaceWrapper) ListLlmModels(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListLlmModels(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetLlmSettings operation middleware
+func (siw *ServerInterfaceWrapper) GetLlmSettings(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetLlmSettings(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PutLlmSettings operation middleware
+func (siw *ServerInterfaceWrapper) PutLlmSettings(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PutLlmSettings(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetAnalysis operation middleware
+func (siw *ServerInterfaceWrapper) GetAnalysis(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetAnalysis(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetConfig operation middleware
+func (siw *ServerInterfaceWrapper) GetConfig(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetConfig(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // ListLeads operation middleware
 func (siw *ServerInterfaceWrapper) ListLeads(w http.ResponseWriter, r *http.Request) {
@@ -502,6 +1045,74 @@ func (siw *ServerInterfaceWrapper) UpdateLead(w http.ResponseWriter, r *http.Req
 	handler.ServeHTTP(w, r)
 }
 
+// ListLeadAnalyses operation middleware
+func (siw *ServerInterfaceWrapper) ListLeadAnalyses(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListLeadAnalysesParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListLeadAnalyses(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// TriggerAnalysis operation middleware
+func (siw *ServerInterfaceWrapper) TriggerAnalysis(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.TriggerAnalysis(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 type UnescapedCookieParamError struct {
 	ParamName string
 	Err       error
@@ -630,6 +1241,27 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	r.Group(func(r chi.Router) {
 		r.Patch(options.BaseURL+"/leads/{id}", wrapper.UpdateLead)
 	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/leads/{id}/analyses", wrapper.ListLeadAnalyses)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/leads/{id}/analyses", wrapper.TriggerAnalysis)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/analyses/{id}", wrapper.GetAnalysis)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/config", wrapper.GetConfig)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/admin/llm-settings", wrapper.GetLlmSettings)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/admin/llm-settings", wrapper.PutLlmSettings)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/admin/llm-models", wrapper.ListLlmModels)
+	})
 
 	return r
 }
@@ -639,43 +1271,87 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"7FnLdts40n6VOuhe2H+omy//nFEvuhPn0p7xOJ5YOVnEbgkiShJiEmAA0LaSo+eZ95gnm1MAqQtFWbI7",
-	"nVVWAimg7vVVofiVxTrNtELlLOt+ZQZtppVF//CCi3f4OUfr6CnWyqHyS55liYy5k1q1Plmt6J2NJ5hy",
-	"Wv1scMS67KfWgnQr/Gtbr4zRhs1ms4gJtLGRGRFhXTaQ6pYnUvSJ3gC0gYF/9kz6Iy4TFAPYu5NuAhma",
-	"xkhiIiBFa/kYLUgFA//KDvabbBaxc+1e61yJ7yC50q4/Il4DYnzBp4nmoqf1GTdj/A78s8Cx77TuJ8Rz",
-	"AHtDLaagb9HA/x/BP1+QTWZRwcn79kSnGVfTc556EVN+f4Zq7Case9BuRyyVqnzuRMxNM2RdZp2RakxK",
-	"Fqcv5Rd/GlWesu5H1ml02ixinU7jmH6PO42DNi0O2vSPX9LPM3ZdpRmx+wZRadxyo3hK8feREflOT3ua",
-	"ft3p6ePy4bjT0wft8umg7TfOn2l5keSWXXtpleOxe5VymVSUPTxoR0zlScKHCbKuMzlGLOPOoSHb/vHx",
-	"j6sr+9v1s9/KxdVVs1z+zOq0KA43itBkXZbm1sEQgYOPaECSA7gQBq1lC/k2+aIqXo03/PmedMnTCITY",
-	"ovAUQlJY8eTC6AyNk+SJEU8smWXp1VeGTzgTa+EFXA3gS0fCQcrjiVTYMMiFf0G7I8DmuFmHBREsJV6T",
-	"1WgV8GCziF/Xj6wKdjHHmQX7BeTc4BQFDKcQtlDULomhh58wdkRzHghVvd9bNA3LR1jSrNFiFjGDn3Np",
-	"UFBGeAMuSF6vsavsD066rpHqVIncOjOtxEtnp3g5Qy4e6Xou+zbWpoxPmeZpwS2VKjxt5iyVwzEaYs1l",
-	"30k029DyvCDUk+FYHACrr4oce+jsMjQuHbXyy9ajJdtlfPQkfIL2sUSgh9kvodXS4d1EXyDJ0lFXIsMO",
-	"ZwOK0GGD3KHoc1+4RtqktGKCO2w4mWJdykmxsjfPpajdthR8D4k0D9JZxBJuXZ8rnky/PCzU1uhV2qHd",
-	"xvrcb6Ka6bjLt26njLgMO2cRyzPxaNPd4dBKt9VLH4pt1Uz3hl6J8gXJSgxV47EaJ0v+qUR/abu5VaJF",
-	"Xi9Ss8ZXK9G0Yp86bCJjnvj9W0FmFVHfZmEjOLx3AZctcIPgjExTFL8AV4Bp5qYQDA/SgnXaoABugSKn",
-	"yarI9QM6Hg0dT8nvvz4r/2SGrcTBprB9ia7w0yNqY8IdlgljpV3vFHoThFRbBwZjVA7KnfBJD3/xYQu5",
-	"cjIp/kALeC+tg73Li1cnzVTAvw72m5uhcaFCUhT2bUZdM44/GK1psslMZ9K6RxpJOkxXF9uFnHPnxnAf",
-	"ZU47ntQYmF5Dyh21oGMgbWwEcqy0R4lEptK19Ghk0TXZeltSxWIvYclskw0uiNsjAe750KJaQbZcxROu",
-	"xoRtPg7iBLmxwKH0ddj8A9Z+wNoC1mrj8VIbFzJjxPPEse68ZlMMsmh+y6+89uU/POx4rdfGhfIuXgYS",
-	"9OaSyPjn61KguTFKzgrvFt0KChaxzzlP5EiiKOJbW55Q56MVi1iirdtVJs/r3NMP65MlLuHNv5d4hTcX",
-	"C47hxQet5uszzz2MorAG1F8bxAb1hkAK+YYFBTgNboLw/HQO8pS6Sze04/ZOV7S6vCOsSZK3I9b9uFO+",
-	"h2S9rnJbot4rrmK7kfW7a+mVdEpHT7QjL3KTen8nYkc3Ep3f/VlafQjnaXniacwi9mGRLctjoPbDY6CJ",
-	"c5n9tdtq+dlP69efrp/51fX/PXUIRBT37D68f3cWhnpSjfR6kLx7ddmD5xenMER3h6h8cAyNvrNogCvh",
-	"n99osGhuZYzNK3WlehNpYSQTpO6W/rdSjRMEq3MTI+gROJO7CYy08X//3utd+Bg0PHZNeIMKDSUnjIxO",
-	"QbrulWoQD1LTRv5IPJGeJRqgImhGPMa5OJgOUQgUYDOMYW8w5PENKtHyOxVPWjyTg30i2ptmeOm1DcQ9",
-	"iS9aQBExsDcYGT88FS1r4lYih3S4NUZFBK7UGw0mTKiXRzSGyncxlvGl20ZAoRLoF76xQb0VgWOdTa8U",
-	"GYhMSOJHYDVwso51hkvloCi3MEGD4Me5aMusLUxSGmLup0TekGve5QoGKb9B0BkqsgLwkUMDSA2AGnvv",
-	"nWh1i4r0sIv+7b//+Vuzs9+Ff1y+PY/AKn6D/ZjborjbCN69PoHDw8O/w/veCdAV0zqeZqT3LZrplTq6",
-	"v28d399DOd+H3GIIjoEf/g0A1S0mOiM5WcSK+uhxGE6VwySRY1QxUjCyiN2isSFC281Os02IU+jEuuyw",
-	"2W4eMp9AEw98Ld9Q0WqMvsZQI+J9dSqIibTuzO+gM4an6NBYDyeSWHzO0d9FQ71f3D13G5wvV8tZVE2w",
-	"E26xIZVFZaWTtwg2HxZ3Q98OglZQ9Dv0UaKoPfNpX518n1dEqw5j1wZ8G5SkavwoFenARnI+DVbozcv8",
-	"cTvaNJHr1LW69QxCc1zPoTLkWyN5Ha1+d6Kx/rf6bDK/bdR8OXkOGR97QPTx6b8bHbXbm0jOZWwtfRgj",
-	"qjZPU26mRSQHYixijo9teTcKHyIybWvCP/RCZ+EGVcDZCy2m39QGgUmwwuKuUpTfivU735RzneXpQlu0",
-	"kd5cTzN9xI46h9uPVL/IrbosGAY4FFfYqtdmUQFfra9SzEJcJ+hw3Y8v/fu5H1dMerRe2sP2UvWj7XrM",
-	"P2muKhDobFYgqgfdN+jqRf22uVcMRDbEwJLvn26AN+gK7cF/HpbOQhhEzHvo+mxcLTVVbEh5Qt05Cjh9",
-	"6TupIl65hVzdKH2nYO+ofbQ/LwNU7haAKAWrZtoyOG6ZkRMmZuWA4BEzgAE1sYOHpgCrUfDeT2L/YuwJ",
-	"k46doKf9XaCnmD//Oeh5XMR+E6y64MZJniTTQoMHUIvO+W40BHduEtZl1Dyz2fXsfwMA",
+	"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",
+	"hs1TOX22hfAAq1HB/dX9/wwA",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

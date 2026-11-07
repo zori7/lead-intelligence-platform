@@ -1,0 +1,11 @@
+{
+  "kind": "synthetic",
+  "description": "Small local bakery, poor ICP fit. Uses Latin-1 charset and HTML entities.",
+  "url": "https://brightleaf-bakery.example/",
+  "final_url": "https://brightleaf-bakery.example/",
+  "redirects": [],
+  "status": 200,
+  "headers": { "content-type": "text/html; charset=iso-8859-1" },
+  "addresses": { "brightleaf-bakery.example": ["93.184.215.20"] },
+  "recorded_at": null
+}

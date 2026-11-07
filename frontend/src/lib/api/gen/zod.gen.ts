@@ -101,9 +101,209 @@ export const zLeadList = z.object({
     total: z.int()
 });
 
+export const zJobStatus = z.enum([
+    'queued',
+    'running',
+    'succeeded',
+    'failed',
+    'cancelled'
+]);
+
+export const zStepName = z.enum([
+    'validate_input',
+    'fetch_website',
+    'extract_company',
+    'analyze_fit',
+    'analyze_intent',
+    'score_lead',
+    'generate_recommendations',
+    'aggregate'
+]);
+
+export const zStepState = z.enum([
+    'pending',
+    'running',
+    'done',
+    'skipped',
+    'failed'
+]);
+
+export const zLlmNode = z.enum([
+    'extract_company',
+    'analyze_fit',
+    'analyze_intent',
+    'generate_recommendations'
+]);
+
+export const zPriority = z.enum([
+    'high',
+    'medium',
+    'low'
+]);
+
+/**
+ * `fetched`: page text was used. `not_provided`: lead has no website. `disabled`: website
+ * fetch is turned off. `blocked`: robots.txt disallows it or the address is not public.
+ * `failed`: network error, timeout, non-2xx, non-HTML, or no readable text.
+ *
+ */
+export const zWebsiteFetchStatus = z.enum([
+    'fetched',
+    'not_provided',
+    'disabled',
+    'blocked',
+    'failed'
+]);
+
+export const zAnalysisStep = z.object({
+    name: zStepName,
+    state: zStepState
+});
+
+export const zAnalysisError = z.object({
+    code: z.string(),
+    message: z.string(),
+    retryable: z.boolean()
+});
+
+export const zCompanyInsights = z.object({
+    name: z.string(),
+    industry: z.string(),
+    size_estimate: z.string(),
+    business_model: z.string(),
+    description: z.string(),
+    key_needs: z.array(z.string()),
+    confidence: z.number().gte(0).lte(1)
+});
+
+export const zFitAnalysis = z.object({
+    score: z.int().gte(0).lte(100),
+    rationale: z.string(),
+    matched_criteria: z.array(z.string()),
+    gaps: z.array(z.string())
+});
+
+export const zIntentAnalysis = z.object({
+    score: z.int().gte(0).lte(100),
+    rationale: z.string(),
+    signals: z.array(z.string())
+});
+
+export const zLeadScore = z.object({
+    value: z.int().gte(0).lte(100),
+    tier: zTier,
+    confidence: z.number().gte(0).lte(1),
+    breakdown: z.object({
+        fit: z.int().gte(0).lte(100).nullable(),
+        intent: z.int().gte(0).lte(100).nullable()
+    })
+});
+
+export const zRecommendation = z.object({
+    action: z.string(),
+    rationale: z.string(),
+    priority: zPriority
+});
+
+export const zWebsiteFetch = z.object({
+    status: zWebsiteFetchStatus,
+    final_url: z.string().nullable()
+});
+
+export const zResultMeta = z.object({
+    node_models: z.record(z.string(), z.string()),
+    website: zWebsiteFetch,
+    partial: z.boolean(),
+    warnings: z.array(z.string()),
+    duration_ms: z.int().gte(0),
+    input_tokens: z.int().gte(0),
+    output_tokens: z.int().gte(0)
+});
+
+export const zAnalysisResult = z.object({
+    summary: z.string(),
+    company: zCompanyInsights,
+    fit: zFitAnalysis.nullable(),
+    intent: zIntentAnalysis.nullable(),
+    score: zLeadScore,
+    recommendations: z.array(zRecommendation),
+    meta: zResultMeta
+});
+
+export const zAnalysisJob = z.object({
+    id: z.uuid(),
+    lead_id: z.uuid(),
+    status: zJobStatus,
+    steps: z.array(zAnalysisStep),
+    progress: z.int().gte(0).lte(100),
+    result: zAnalysisResult.nullable(),
+    error: zAnalysisError.nullable(),
+    created_at: z.iso.datetime(),
+    started_at: z.iso.datetime().nullable(),
+    finished_at: z.iso.datetime().nullable()
+});
+
 export const zLeadDetail = z.object({
     lead: zLead,
-    latest_analysis: z.record(z.string(), z.unknown()).nullable()
+    latest_analysis: zAnalysisJob.nullable()
+});
+
+export const zAnalysisJobList = z.object({
+    items: z.array(zAnalysisJob)
+});
+
+export const zAppConfig = z.object({
+    ai_configured: z.boolean()
+});
+
+export const zModelName = z.string().min(1).max(200);
+
+export const zTemperature = z.number().gte(0).lte(2);
+
+export const zLlmDefaultSetting = z.object({
+    model: zModelName.nullable(),
+    temperature: zTemperature.nullable()
+});
+
+export const zLlmNodeSetting = z.object({
+    node: zLlmNode,
+    model: zModelName.nullable(),
+    temperature: zTemperature.nullable(),
+    effective_model: z.string().nullable(),
+    effective_temperature: zTemperature
+});
+
+export const zLlmSettings = z.object({
+    default: zLlmDefaultSetting,
+    nodes: z.array(zLlmNodeSetting),
+    configured: z.boolean(),
+    updated_at: z.iso.datetime()
+});
+
+export const zLlmDefaultUpdate = z.object({
+    model: zModelName,
+    temperature: zTemperature.nullable()
+});
+
+export const zLlmNodeUpdate = z.object({
+    model: zModelName.nullable(),
+    temperature: zTemperature.nullable()
+});
+
+export const zLlmSettingsUpdate = z.object({
+    default: zLlmDefaultUpdate,
+    nodes: z.object({
+        extract_company: zLlmNodeUpdate,
+        analyze_fit: zLlmNodeUpdate,
+        analyze_intent: zLlmNodeUpdate,
+        generate_recommendations: zLlmNodeUpdate
+    })
+});
+
+export const zModelList = z.object({
+    items: z.array(z.object({
+        id: z.string()
+    }))
 });
 
 export const zError = z.object({
@@ -162,3 +362,56 @@ export const zUpdateLeadPath = z.object({
  * The updated lead.
  */
 export const zUpdateLeadResponse = zLead;
+
+export const zListLeadAnalysesPath = z.object({
+    id: z.uuid()
+});
+
+export const zListLeadAnalysesQuery = z.object({
+    limit: z.int().gte(1).lte(20).optional().default(10)
+});
+
+/**
+ * The lead's analyses.
+ */
+export const zListLeadAnalysesResponse = zAnalysisJobList;
+
+export const zTriggerAnalysisPath = z.object({
+    id: z.uuid()
+});
+
+/**
+ * An analysis is already active for this lead; that job is returned.
+ */
+export const zTriggerAnalysisResponse = zAnalysisJob;
+
+export const zGetAnalysisPath = z.object({
+    id: z.uuid()
+});
+
+/**
+ * The job.
+ */
+export const zGetAnalysisResponse = zAnalysisJob;
+
+/**
+ * Application status.
+ */
+export const zGetConfigResponse = zAppConfig;
+
+/**
+ * Current settings.
+ */
+export const zGetLlmSettingsResponse = zLlmSettings;
+
+export const zPutLlmSettingsBody = zLlmSettingsUpdate;
+
+/**
+ * The saved settings.
+ */
+export const zPutLlmSettingsResponse = zLlmSettings;
+
+/**
+ * Model IDs, sorted.
+ */
+export const zListLlmModelsResponse = zModelList;

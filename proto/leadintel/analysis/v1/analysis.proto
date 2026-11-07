@@ -1,0 +1,198 @@
+syntax = "proto3";
+
+package leadintel.analysis.v1;
+
+option go_package = "leadintel/backend/gen/analysis/v1;analysisv1";
+
+// Executes AI lead analysis. Stateless apart from in-flight dedupe by job_id.
+service AnalysisService {
+  // Runs the workflow and streams progress. The stream ends with exactly one
+  // terminal event (completed | failed). Transport errors surface as gRPC status.
+  rpc AnalyzeLead(AnalyzeLeadRequest) returns (stream AnalysisEvent);
+
+  // Lists models the configured LLM server exposes (GET {LLM_BASE_URL}/models).
+  // Used by the admin page and to validate settings on save.
+  // UNAVAILABLE if the LLM server cannot be reached.
+  rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+}
+// Health: standard grpc.health.v1.Health (service name "leadintel.analysis.v1.AnalysisService").
+
+message AnalyzeLeadRequest {
+  string job_id = 1; // UUID; idempotency key for in-flight dedupe
+  LeadInput lead = 2;
+  repeated NodeModelConfig models = 3; // fully RESOLVED by Go: exactly one entry per LLM step
+}
+
+// Per-node model selection, resolved by Go from llm_node_settings.
+// Python has no model defaults: a missing/duplicate/non-LLM step → INVALID_INPUT.
+message NodeModelConfig {
+  Step step = 1; // one of EXTRACT_COMPANY, ANALYZE_FIT, ANALYZE_INTENT, GENERATE_RECOMMENDATIONS
+  string model = 2; // non-empty
+  float temperature = 3; // 0–2
+}
+
+message ListModelsRequest {}
+
+message ListModelsResponse {
+  repeated ModelInfo models = 1;
+}
+
+message ModelInfo {
+  string id = 1;
+}
+
+message LeadInput {
+  string company_name = 1;
+  string website = 2; // empty = unknown (proto3 scalars)
+  string contact_name = 3;
+  string contact_title = 4;
+  string industry = 5;
+  string company_size = 6;
+  string notes = 7;
+  // contact_email intentionally NOT sent: not needed for analysis (data minimization).
+}
+
+message AnalysisEvent {
+  string job_id = 1;
+  uint32 sequence = 2; // monotonically increasing per job
+  oneof payload {
+    StepProgress progress = 10;
+    AnalysisCompleted completed = 11;
+    AnalysisFailed failed = 12;
+  }
+}
+
+enum Step {
+  STEP_UNSPECIFIED = 0;
+  STEP_VALIDATE_INPUT = 1;
+  STEP_EXTRACT_COMPANY = 2;
+  STEP_ANALYZE_FIT = 3;
+  STEP_ANALYZE_INTENT = 4;
+  STEP_SCORE_LEAD = 5;
+  STEP_GENERATE_RECOMMENDATIONS = 6;
+  STEP_AGGREGATE = 7;
+  STEP_FETCH_WEBSITE = 8; // runs between VALIDATE_INPUT and EXTRACT_COMPANY
+}
+
+enum StepState {
+  STEP_STATE_UNSPECIFIED = 0;
+  STEP_STATE_RUNNING = 1;
+  STEP_STATE_DONE = 2;
+  STEP_STATE_SKIPPED = 3;
+  STEP_STATE_FAILED = 4;
+}
+
+message StepProgress {
+  Step step = 1;
+  StepState state = 2;
+  uint32 percent = 3; // overall progress 0–100
+  string message = 4; // short human-readable, no PII
+}
+
+message AnalysisCompleted {
+  AnalysisResult result = 1;
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_INVALID_INPUT = 1; // contract violation (non-retryable)
+  ERROR_CODE_INSUFFICIENT_DATA = 2; // not enough signal to analyze (non-retryable)
+  ERROR_CODE_PROVIDER_ERROR = 3; // LLM failed after retries (retryable)
+  ERROR_CODE_PROVIDER_CONFIG = 4; // auth rejected or model not found (non-retryable; fix in admin settings)
+  ERROR_CODE_INTERNAL = 5; // bug (retryable)
+}
+
+message AnalysisFailed {
+  ErrorCode code = 1;
+  string message = 2; // user-safe
+  bool retryable = 3;
+}
+
+message AnalysisResult {
+  string summary = 1;
+  CompanyInsights company = 2;
+  FitAnalysis fit = 3; // unset when branch failed
+  IntentAnalysis intent = 4; // unset when branch failed
+  LeadScore score = 5;
+  repeated Recommendation recommendations = 6;
+  ResultMeta meta = 7;
+}
+
+message CompanyInsights {
+  string name = 1;
+  string industry = 2;
+  string size_estimate = 3;
+  string business_model = 4;
+  string description = 5;
+  repeated string key_needs = 6;
+  float confidence = 7;
+}
+
+message FitAnalysis {
+  uint32 score = 1;
+  string rationale = 2;
+  repeated string matched_criteria = 3;
+  repeated string gaps = 4;
+}
+
+message IntentAnalysis {
+  uint32 score = 1;
+  string rationale = 2;
+  repeated string signals = 3;
+}
+
+enum Tier {
+  TIER_UNSPECIFIED = 0;
+  TIER_HOT = 1;
+  TIER_WARM = 2;
+  TIER_COLD = 3;
+}
+
+message ScoreBreakdown {
+  optional uint32 fit = 1;
+  optional uint32 intent = 2;
+}
+
+message LeadScore {
+  uint32 value = 1;
+  Tier tier = 2;
+  float confidence = 3;
+  ScoreBreakdown breakdown = 4;
+}
+
+enum Priority {
+  PRIORITY_UNSPECIFIED = 0;
+  PRIORITY_HIGH = 1;
+  PRIORITY_MEDIUM = 2;
+  PRIORITY_LOW = 3;
+}
+
+message Recommendation {
+  string action = 1;
+  string rationale = 2;
+  Priority priority = 3;
+}
+
+message ResultMeta {
+  map<string, string> node_models = 1; // step name (snake_case) → model actually used
+  bool partial = 2;
+  repeated string warnings = 3;
+  uint32 duration_ms = 4;
+  uint32 input_tokens = 5;
+  uint32 output_tokens = 6;
+  WebsiteFetch website = 7;
+}
+
+enum WebsiteFetchStatus {
+  WEBSITE_FETCH_STATUS_UNSPECIFIED = 0;
+  WEBSITE_FETCH_STATUS_FETCHED = 1;
+  WEBSITE_FETCH_STATUS_NOT_PROVIDED = 2;
+  WEBSITE_FETCH_STATUS_DISABLED = 3;
+  WEBSITE_FETCH_STATUS_BLOCKED = 4;
+  WEBSITE_FETCH_STATUS_FAILED = 5;
+}
+
+message WebsiteFetch {
+  WebsiteFetchStatus status = 1;
+  string final_url = 2; // empty unless FETCHED
+}

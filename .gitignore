@@ -43,3 +43,6 @@ npm-debug.log*
 
 # Recorded third-party website fixtures stay local (SPEC.md D12)
 ai/tests/fixtures/websites/recorded/
+
+# Pinned code generators (make tools)
+.bin/

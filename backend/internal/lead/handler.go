@@ -19,24 +19,35 @@ type Repository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 }
 
+// LatestAnalysisFunc returns the lead's most recent analysis job, or nil when
+// the lead was never analyzed. It is supplied by the analysis feature; the
+// lead package does not depend on it.
+type LatestAnalysisFunc func(ctx context.Context, leadID uuid.UUID) (any, error)
+
 // Handler implements the lead operations of the generated api.ServerInterface.
 // Routing, path-parameter parsing and query-parameter type conversion are
-// generated from api/openapi.yaml; a missing or mistyped operation is a compile error.
+// generated from api/openapi.yaml. Operations of other features answer 501
+// through the embedded api.Unimplemented; cmd/api composes all handlers.
 type Handler struct {
-	repo Repository
+	api.Unimplemented
+	repo   Repository
+	latest LatestAnalysisFunc
 }
 
 var _ api.ServerInterface = (*Handler)(nil)
 
-func NewHandler(repo Repository) *Handler { return &Handler{repo: repo} }
+// NewHandler builds the lead handler. latest may be nil, in which case
+// latest_analysis is always null.
+func NewHandler(repo Repository, latest LatestAnalysisFunc) *Handler {
+	return &Handler{repo: repo, latest: latest}
+}
 
 type listResponse struct {
 	Items []Lead `json:"items"`
 	Total int    `json:"total"`
 }
 
-// detailResponse is the `LeadDetail` schema. latest_analysis is populated once
-// the analysis feature exists; until then it is always null.
+// detailResponse is the `LeadDetail` schema.
 type detailResponse struct {
 	Lead           Lead `json:"lead"`
 	LatestAnalysis any  `json:"latest_analysis"`
@@ -84,7 +95,14 @@ func (h *Handler) GetLead(w http.ResponseWriter, r *http.Request, id uuid.UUID) 
 		httpx.WriteError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, detailResponse{Lead: l})
+	resp := detailResponse{Lead: l}
+	if h.latest != nil {
+		if resp.LatestAnalysis, err = h.latest(r.Context(), id); err != nil {
+			httpx.WriteError(w, r, err)
+			return
+		}
+	}
+	httpx.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) UpdateLead(w http.ResponseWriter, r *http.Request, id uuid.UUID) {

@@ -15,7 +15,27 @@ var (
 	ErrNotFound = errors.New("not found")
 	// ErrInvalidState means the entity exists but the operation is not allowed in its current state.
 	ErrInvalidState = errors.New("invalid state")
+	// ErrConflict means the request conflicts with the system's configuration or state
+	// in a way the caller can fix (e.g. AI not configured yet).
+	ErrConflict = errors.New("conflict")
+	// ErrUnprocessable means the request is well-formed but refers to something that
+	// does not exist outside this service (e.g. a model the LLM server does not list).
+	ErrUnprocessable = errors.New("unprocessable")
+	// ErrUnavailable means a dependency needed to complete the request is unreachable.
+	ErrUnavailable = errors.New("unavailable")
 )
+
+// CodedError is a domain error with a stable machine-readable code and a
+// user-safe message. Kind is one of the kinds above and decides the HTTP status.
+type CodedError struct {
+	Kind    error
+	Code    string
+	Message string
+	Fields  map[string]string
+}
+
+func (e *CodedError) Error() string { return e.Code + ": " + e.Message }
+func (e *CodedError) Unwrap() error { return e.Kind }
 
 // ValidationError carries per-field, user-safe messages.
 type ValidationError struct {

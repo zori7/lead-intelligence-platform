@@ -209,7 +209,7 @@ lead-intelligence-platform/
 ├── docker-compose.yml
 ├── .env.example
 ├── buf.yaml                      # buf module config (lint + breaking)
-├── buf.gen.yaml                  # codegen → backend/gen, ai/src/lead_ai/gen
+├── buf.gen.yaml                  # Go codegen → backend/gen (Python: grpcio-tools → ai/src/lead_ai/gen, see Makefile)
 ├── api/
 │   └── openapi.yaml              # REST contract: source of truth for Go + TS types and validation rules
 ├── proto/
@@ -687,7 +687,7 @@ syntax = "proto3";
 
 package leadintel.analysis.v1;
 
-option go_package = "github.com/<owner>/lead-intelligence-platform/backend/gen/analysis/v1;analysisv1";
+option go_package = "leadintel/backend/gen/analysis/v1;analysisv1";
 
 // Executes AI lead analysis. Stateless apart from in-flight dedupe by job_id.
 service AnalysisService {
@@ -852,7 +852,7 @@ The one weakness (a Go restart loses in-flight streams) is acceptable for an MVP
 
 | Concern | Rule |
 |---|---|
-| **Deadline** | Go sets `context.WithTimeout(ANALYSIS_TIMEOUT)` (default 180s) per job. gRPC propagates it. Python wraps the graph run in `asyncio.timeout(context.time_remaining())`. |
+| **Deadline** | Go sets `context.WithTimeout(ANALYSIS_TIMEOUT)` (default 300s) per job. gRPC propagates it. Python wraps the graph run in `asyncio.timeout(context.time_remaining())`. |
 | **Cancellation** | Go keeps `map[jobID]context.CancelFunc` (mutex-guarded). Cancelling cancels the stream. In `grpc.aio` the handler task gets `CancelledError`, which unwinds the graph and aborts in-flight HTTP calls to the LLM. |
 | **Idempotency** | `job_id` is the key. Python keeps `in_flight: set[str]`; a duplicate gets `ALREADY_EXISTS`. Go never dispatches the same job twice because the claim is an atomic `queued → running` transition. |
 | **Model config** | Go resolves settings when it claims the job, stores them in `analysis_jobs.model_config`, and sends them in `models`. Config travels **with the request**: Python never reads settings, there's no cache to invalidate, and every job is reproducible from its row. |
@@ -994,7 +994,7 @@ Weights and thresholds are module constants. Unit tests cover every branch and b
 - **Recording:** each node records the model it actually used. `aggregate` writes them to `meta.node_models`, and the UI shows them in the result footer.
 - `LLM_STRUCTURED_OUTPUT_METHOD` = `json_schema` (default) | `function_calling` | `json_mode`. Local servers differ in support. If a model returns invalid JSON under `json_schema`, switch to `json_mode`. The Pydantic parse step plus retry catches remaining malformed output.
 - **Local-model realities:**
-  - Latency is higher, so defaults are `LLM_TIMEOUT_SECONDS=60`, `ANALYSIS_TIMEOUT=180s`, `ANALYSIS_WORKERS=2`.
+  - Latency is higher, so defaults are `LLM_TIMEOUT_SECONDS=120`, `ANALYSIS_TIMEOUT=300s`, `ANALYSIS_WORKERS=2`. They leave at least a 2× margin over a 27B reasoning model measured during M2 (slowest call 48s, full run 122s); smaller models finish well within them.
   - **Mixing models costs swap time.** Local servers often hold only one model in memory (e.g. Ollama's `OLLAMA_MAX_LOADED_MODELS`). Using different models for `analyze_fit` and `analyze_intent`, which run in parallel, can force a reload per call. The admin page shows a hint when the two parallel nodes resolve to different models.
   - Many local servers process requests one at a time (e.g. Ollama's `OLLAMA_NUM_PARALLEL`). The fit and intent branches are still dispatched in parallel, but may be served one after the other. This is correct, just slower.
   - Keep prompts and schemas compact (short field descriptions, at most 5 list items) so small models stay reliable.
@@ -1201,7 +1201,7 @@ Rules:
 | **Python down before dispatch** | Dispatch retries with backoff (§8.4), then fails the job with `ai_unavailable`. `/readyz` reports `ai: down`. |
 | **PostgreSQL down** | API returns `503`/`500`. pgxpool reconnects automatically. Workers log and back off. Compose `depends_on: service_healthy` handles startup ordering. |
 | **Lead website slow or down** | One attempt bounded by `WEB_FETCH_TIMEOUT_SECONDS` (10s), then the analysis continues from lead data with `meta.website.status = failed`. |
-| **LLM server slow or down** | Per-call timeout (60s) plus overall job deadline (180s). If the local server is down, the job fails with `provider_error` after the per-call retries, and the user can retry. |
+| **LLM server slow or down** | Per-call timeout (120s) plus overall job deadline (300s). If the local server is down, the job fails with `provider_error` after the per-call retries, and the user can retry. |
 | **Browser disconnects from SSE** | No effect on the job. On reconnect, a snapshot restores state. |
 | **Graceful shutdown (SIGTERM)** | Go: stop accepting HTTP, stop claiming jobs, cancel in-flight jobs and mark them `interrupted`, drain up to 10s. Python: `server.stop(grace=10)`. |
 
@@ -1252,7 +1252,7 @@ Rules:
 | `API_ADDR` | api | `:8080` | HTTP listen address |
 | `AI_GRPC_ADDR` | api | `ai:50051` | Python service address |
 | `ANALYSIS_WORKERS` | api | `2` | Max concurrent jobs per API instance (kept low for local LLMs) |
-| `ANALYSIS_TIMEOUT` | api | `180s` | Per-job deadline |
+| `ANALYSIS_TIMEOUT` | api | `300s` | Per-job deadline |
 | `AI_DISPATCH_ATTEMPTS` | api | `3` | Pre-stream dispatch retries |
 | `MIGRATE_ON_START` | api | `true` | Run goose migrations at boot |
 | `ADMIN_TOKEN` | api | *(required, ≥ 24 chars)* | Protects `/api/admin/*`. Generate with `openssl rand -hex 24`. |
@@ -1261,7 +1261,7 @@ Rules:
 | `LLM_BASE_URL` | ai | *(required)*, e.g. `http://host.docker.internal:11434/v1` | Your local OpenAI-compatible endpoint. Use `host.docker.internal` to reach a server running on the host from inside Docker. |
 | `LLM_API_KEY` | ai | `local` | Dummy by default (local servers ignore it) |
 | `LLM_STRUCTURED_OUTPUT_METHOD` | ai | `json_schema` | `json_schema` \| `function_calling` \| `json_mode` |
-| `LLM_TIMEOUT_SECONDS` | ai | `60` | Per-call timeout |
+| `LLM_TIMEOUT_SECONDS` | ai | `120` | Per-call timeout |
 | `LLM_MAX_ATTEMPTS` | ai | `3` | Per-call attempts |
 | `MAX_CONCURRENT_ANALYSES` | ai | `4` | gRPC concurrency cap |
 | `ICP_DESCRIPTION` | ai | *B2B SaaS, 50–1000 employees, …* | Ideal customer profile used by `analyze_fit` |
@@ -1278,7 +1278,7 @@ Each service parses and validates its config at startup and **exits non-zero wit
 | Service | Image / build | Ports (host) | Depends on | Healthcheck |
 |---|---|---|---|---|
 | `postgres` | `postgres:17-alpine`, volume `pgdata` | `5432` (dev convenience) | — | `pg_isready` |
-| `ai` | `./ai` (python:3.12-slim + uv), `extra_hosts: ["host.docker.internal:host-gateway"]` (needed on Linux, harmless on macOS). Needs outbound internet access for the website fetch (default Docker networking provides it). | none (internal `50051`) | — | `python -m lead_ai.healthcheck` (grpc health) |
+| `ai` | `./ai` (python:3.14-slim + uv), `extra_hosts: ["host.docker.internal:host-gateway"]` (needed on Linux, harmless on macOS). Needs outbound internet access for the website fetch (default Docker networking provides it). | `127.0.0.1:50051` (dev convenience: lets a host-run API reach it; never exposed beyond localhost) | — | `python -m lead_ai.healthcheck` (grpc health) |
 | `api` | `./backend` (multi-stage → distroless static) | `8080` | `postgres: service_healthy`, `ai: service_healthy` | `GET /healthz` |
 | `web` | `./frontend` (node build → `nginx:alpine`) | `5173 → 80` | `api` | — |
 
@@ -1297,7 +1297,7 @@ cd backend && go run ./cmd/api            # :8080
 cd frontend && npm run dev                # :5173, Vite proxies /api → :8080
 # Running ai on the host instead? Use LLM_BASE_URL=http://localhost:<port>/v1
 
-make proto      # buf generate → backend/gen + ai/src/lead_ai/gen
+make proto      # buf lint + generate → backend/gen; grpcio-tools → ai/src/lead_ai/gen
 make openapi    # api/openapi.yaml → backend/internal/api + frontend/src/lib/api/gen
 make test       # go test ./... · uv run pytest · npm run check && npm test
 make lint       # go vet + staticcheck · ruff · svelte-check · buf lint
@@ -1412,7 +1412,7 @@ Every milestone ends in a runnable, demonstrable state.
 - The same lead without a website succeeds with `fetch_website` `skipped` and `meta.website.status = not_provided`. A lead whose website is `http://localhost:8080` or `http://api:8080` succeeds with `blocked`, and no request reaches that address.
 - The job's `model_config` and `result.meta.node_models` both show the override for `extract_company` and the default for the other three nodes. Changing settings afterwards does not change the stored job.
 - A lead with only `company_name` gives `failed / insufficient_data / retryable=false` **without any LLM call or website fetch**, and the later steps show as `skipped`.
-- With `ai` stopped, a triggered job ends `failed / ai_unavailable / retryable=true` after ~7s of retries.
+- With `ai` stopped, a triggered job ends `failed / ai_unavailable / retryable=true` after ~3s of retries (3 attempts, backoff 1s and 2s).
 
 **Verify**
 - `uv run pytest`:

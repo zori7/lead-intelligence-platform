@@ -1,0 +1,17 @@
+{
+  "kind": "synthetic",
+  "description": "Mid-size logistics company, partial ICP fit. Two redirect hops (http -> https -> www); no meta description.",
+  "url": "http://helio-freight.example/",
+  "final_url": "https://www.helio-freight.example/en/",
+  "redirects": [
+    { "url": "http://helio-freight.example/", "status": 301, "location": "https://helio-freight.example/" },
+    { "url": "https://helio-freight.example/", "status": 302, "location": "https://www.helio-freight.example/en/" }
+  ],
+  "status": 200,
+  "headers": { "content-type": "text/html" },
+  "addresses": {
+    "helio-freight.example": ["151.101.1.30"],
+    "www.helio-freight.example": ["151.101.1.31", "2606:4700::31"]
+  },
+  "recorded_at": null
+}

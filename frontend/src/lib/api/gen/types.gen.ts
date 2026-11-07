@@ -92,11 +92,228 @@ export type LeadList = {
 export type LeadDetail = {
     lead: Lead;
     /**
-     * The most recent analysis job; null until analyses exist (SPEC.md M2).
+     * The most recent analysis job; null if the lead was never analyzed.
      */
-    latest_analysis: {
-        [key: string]: unknown;
-    } | null;
+    latest_analysis: AnalysisJob | null;
+};
+
+export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+
+export type StepName = 'validate_input' | 'fetch_website' | 'extract_company' | 'analyze_fit' | 'analyze_intent' | 'score_lead' | 'generate_recommendations' | 'aggregate';
+
+export type StepState = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
+
+export type LlmNode = 'extract_company' | 'analyze_fit' | 'analyze_intent' | 'generate_recommendations';
+
+export type Priority = 'high' | 'medium' | 'low';
+
+/**
+ * `fetched`: page text was used. `not_provided`: lead has no website. `disabled`: website
+ * fetch is turned off. `blocked`: robots.txt disallows it or the address is not public.
+ * `failed`: network error, timeout, non-2xx, non-HTML, or no readable text.
+ *
+ */
+export type WebsiteFetchStatus = 'fetched' | 'not_provided' | 'disabled' | 'blocked' | 'failed';
+
+export type AnalysisStep = {
+    name: StepName;
+    state: StepState;
+};
+
+export type AnalysisError = {
+    /**
+     * `invalid_input`, `insufficient_data`, `provider_error`, `provider_config`, `internal`,
+     * `ai_unavailable`, `timeout`, `interrupted` (SPEC.md §11.1).
+     *
+     */
+    code: string;
+    /**
+     * User-safe message.
+     */
+    message: string;
+    /**
+     * Whether the UI should offer Retry.
+     */
+    retryable: boolean;
+};
+
+export type AnalysisJob = {
+    id: string;
+    lead_id: string;
+    status: JobStatus;
+    steps: Array<AnalysisStep>;
+    progress: number;
+    /**
+     * Present when the job succeeded.
+     */
+    result: AnalysisResult | null;
+    /**
+     * Present when the job failed.
+     */
+    error: AnalysisError | null;
+    created_at: string;
+    started_at: string | null;
+    finished_at: string | null;
+};
+
+export type AnalysisJobList = {
+    items: Array<AnalysisJob>;
+};
+
+export type AnalysisResult = {
+    summary: string;
+    company: CompanyInsights;
+    /**
+     * Null when the fit branch failed (`meta.partial`).
+     */
+    fit: FitAnalysis | null;
+    /**
+     * Null when the intent branch failed (`meta.partial`).
+     */
+    intent: IntentAnalysis | null;
+    score: LeadScore;
+    recommendations: Array<Recommendation>;
+    meta: ResultMeta;
+};
+
+export type CompanyInsights = {
+    name: string;
+    industry: string;
+    size_estimate: string;
+    business_model: string;
+    description: string;
+    key_needs: Array<string>;
+    confidence: number;
+};
+
+export type FitAnalysis = {
+    score: number;
+    rationale: string;
+    matched_criteria: Array<string>;
+    gaps: Array<string>;
+};
+
+export type IntentAnalysis = {
+    score: number;
+    rationale: string;
+    signals: Array<string>;
+};
+
+export type LeadScore = {
+    value: number;
+    tier: Tier;
+    confidence: number;
+    breakdown: {
+        fit: number | null;
+        intent: number | null;
+    };
+};
+
+export type Recommendation = {
+    action: string;
+    rationale: string;
+    priority: Priority;
+};
+
+export type WebsiteFetch = {
+    status: WebsiteFetchStatus;
+    /**
+     * URL after redirects; null unless `fetched`.
+     */
+    final_url: string | null;
+};
+
+export type ResultMeta = {
+    /**
+     * Model actually used per LLM step, keyed by step name.
+     */
+    node_models: {
+        [key: string]: string;
+    };
+    website: WebsiteFetch;
+    /**
+     * A non-critical step failed; the result is incomplete.
+     */
+    partial: boolean;
+    warnings: Array<string>;
+    duration_ms: number;
+    input_tokens: number;
+    output_tokens: number;
+};
+
+export type AppConfig = {
+    /**
+     * False until an admin sets a default model; analyses are blocked until then.
+     */
+    ai_configured: boolean;
+};
+
+export type ModelName = string;
+
+export type Temperature = number;
+
+export type LlmDefaultSetting = {
+    /**
+     * Null means AI is not configured yet.
+     */
+    model: ModelName | null;
+    /**
+     * Null means 0.2.
+     */
+    temperature: Temperature | null;
+};
+
+export type LlmNodeSetting = {
+    node: LlmNode;
+    /**
+     * Null inherits the default.
+     */
+    model: ModelName | null;
+    /**
+     * Null inherits the default.
+     */
+    temperature: Temperature | null;
+    /**
+     * Resolved model (read-only); null while AI is not configured.
+     */
+    effective_model: string | null;
+    effective_temperature: Temperature;
+};
+
+export type LlmSettings = {
+    default: LlmDefaultSetting;
+    nodes: Array<LlmNodeSetting>;
+    configured: boolean;
+    updated_at: string;
+};
+
+export type LlmDefaultUpdate = {
+    model: ModelName;
+    temperature: Temperature | null;
+};
+
+export type LlmNodeUpdate = {
+    model: ModelName | null;
+    temperature: Temperature | null;
+};
+
+export type LlmSettingsUpdate = {
+    default: LlmDefaultUpdate;
+    /**
+     * All four LLM steps, each exactly once (full replace).
+     */
+    nodes: {
+        extract_company: LlmNodeUpdate;
+        analyze_fit: LlmNodeUpdate;
+        analyze_intent: LlmNodeUpdate;
+        generate_recommendations: LlmNodeUpdate;
+    };
+};
+
+export type ModelList = {
+    items: Array<{
+        id: string;
+    }>;
 };
 
 export type Error = {
@@ -278,3 +495,218 @@ export type UpdateLeadResponses = {
 };
 
 export type UpdateLeadResponse = UpdateLeadResponses[keyof UpdateLeadResponses];
+
+export type ListLeadAnalysesData = {
+    body?: never;
+    path: {
+        /**
+         * A malformed ID is treated as unknown (404).
+         */
+        id: string;
+    };
+    query?: {
+        limit?: number;
+    };
+    url: '/leads/{id}/analyses';
+};
+
+export type ListLeadAnalysesErrors = {
+    /**
+     * `invalid_json` or `validation_failed` (with per-field messages in `fields`).
+     */
+    400: Error;
+    /**
+     * `not_found`
+     */
+    404: Error;
+};
+
+export type ListLeadAnalysesError = ListLeadAnalysesErrors[keyof ListLeadAnalysesErrors];
+
+export type ListLeadAnalysesResponses = {
+    /**
+     * The lead's analyses.
+     */
+    200: AnalysisJobList;
+};
+
+export type ListLeadAnalysesResponse = ListLeadAnalysesResponses[keyof ListLeadAnalysesResponses];
+
+export type TriggerAnalysisData = {
+    body?: never;
+    path: {
+        /**
+         * A malformed ID is treated as unknown (404).
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/leads/{id}/analyses';
+};
+
+export type TriggerAnalysisErrors = {
+    /**
+     * `not_found`
+     */
+    404: Error;
+    /**
+     * `ai_not_configured`: no default model has been set on the admin page.
+     */
+    409: Error;
+};
+
+export type TriggerAnalysisError = TriggerAnalysisErrors[keyof TriggerAnalysisErrors];
+
+export type TriggerAnalysisResponses = {
+    /**
+     * An analysis is already active for this lead; that job is returned.
+     */
+    200: AnalysisJob;
+    /**
+     * A new analysis job was queued.
+     */
+    202: AnalysisJob;
+};
+
+export type TriggerAnalysisResponse = TriggerAnalysisResponses[keyof TriggerAnalysisResponses];
+
+export type GetAnalysisData = {
+    body?: never;
+    path: {
+        /**
+         * A malformed ID is treated as unknown (404).
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/analyses/{id}';
+};
+
+export type GetAnalysisErrors = {
+    /**
+     * `not_found`
+     */
+    404: Error;
+};
+
+export type GetAnalysisError = GetAnalysisErrors[keyof GetAnalysisErrors];
+
+export type GetAnalysisResponses = {
+    /**
+     * The job.
+     */
+    200: AnalysisJob;
+};
+
+export type GetAnalysisResponse = GetAnalysisResponses[keyof GetAnalysisResponses];
+
+export type GetConfigData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/config';
+};
+
+export type GetConfigResponses = {
+    /**
+     * Application status.
+     */
+    200: AppConfig;
+};
+
+export type GetConfigResponse = GetConfigResponses[keyof GetConfigResponses];
+
+export type GetLlmSettingsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/admin/llm-settings';
+};
+
+export type GetLlmSettingsErrors = {
+    /**
+     * `unauthorized`: missing or wrong admin token.
+     */
+    401: Error;
+};
+
+export type GetLlmSettingsError = GetLlmSettingsErrors[keyof GetLlmSettingsErrors];
+
+export type GetLlmSettingsResponses = {
+    /**
+     * Current settings.
+     */
+    200: LlmSettings;
+};
+
+export type GetLlmSettingsResponse = GetLlmSettingsResponses[keyof GetLlmSettingsResponses];
+
+export type PutLlmSettingsData = {
+    body: LlmSettingsUpdate;
+    path?: never;
+    query?: never;
+    url: '/admin/llm-settings';
+};
+
+export type PutLlmSettingsErrors = {
+    /**
+     * `invalid_json` or `validation_failed` (with per-field messages in `fields`).
+     */
+    400: Error;
+    /**
+     * `unauthorized`: missing or wrong admin token.
+     */
+    401: Error;
+    /**
+     * `payload_too_large` (body over 64 KB).
+     */
+    413: Error;
+    /**
+     * `unknown_model`: a model is not available on the LLM server (`fields` names it).
+     */
+    422: Error;
+    /**
+     * `llm_unreachable`: the LLM server could not be reached.
+     */
+    503: Error;
+};
+
+export type PutLlmSettingsError = PutLlmSettingsErrors[keyof PutLlmSettingsErrors];
+
+export type PutLlmSettingsResponses = {
+    /**
+     * The saved settings.
+     */
+    200: LlmSettings;
+};
+
+export type PutLlmSettingsResponse = PutLlmSettingsResponses[keyof PutLlmSettingsResponses];
+
+export type ListLlmModelsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/admin/llm-models';
+};
+
+export type ListLlmModelsErrors = {
+    /**
+     * `unauthorized`: missing or wrong admin token.
+     */
+    401: Error;
+    /**
+     * `llm_unreachable`: the LLM server could not be reached.
+     */
+    503: Error;
+};
+
+export type ListLlmModelsError = ListLlmModelsErrors[keyof ListLlmModelsErrors];
+
+export type ListLlmModelsResponses = {
+    /**
+     * Model IDs, sorted.
+     */
+    200: ModelList;
+};
+
+export type ListLlmModelsResponse = ListLlmModelsResponses[keyof ListLlmModelsResponses];

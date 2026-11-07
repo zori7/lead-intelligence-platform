@@ -22,10 +22,10 @@ habit, the rule wins.
 |---|---|---|
 | `backend/internal/api/openapi.gen.go`: Go types, chi server interface, embedded spec | `api/openapi.yaml` | `make openapi` |
 | `frontend/src/lib/api/gen/*`: TypeScript types and zod schemas | `api/openapi.yaml` | `make openapi` |
-| `backend/gen/`, `ai/src/lead_ai/gen/`: gRPC (from M2) | `proto/**/*.proto` | `make proto` |
+| `backend/gen/`, `ai/src/lead_ai/gen/`: gRPC code | `proto/**/*.proto` | `make proto` |
 
 - **Never edit generated files.** Change the spec, run the generator, commit both.
-  `make openapi-check` fails when generated code is stale.
+  `make openapi-check` and `make proto-check` fail when generated code is stale.
 - **To add or change an endpoint or field:** edit `api/openapi.yaml` → `make openapi` →
   implement the new `api.ServerInterface` method (the build fails until you do) → update
   the frontend using the regenerated types.
@@ -48,6 +48,18 @@ habit, the rule wins.
 - Depend on small interfaces at the consumer (`lead.Repository`), not concrete types.
 - Tests are table-driven. Store tests use `TEST_DATABASE_URL` and skip without it.
 - `gofmt` and `go vet` must be clean.
+
+## Python (`ai/`)
+
+- The service is stateless: no database, no settings of its own. Models arrive with each
+  request; tests inject fakes through `configurable` (`llm_factory`, `http_client`,
+  `resolver`). There is no runtime fake mode.
+- Website fetching goes through `lead_ai.web.Fetcher` only, so the address guard applies to
+  every request and redirect hop. Never fetch lead URLs with another client.
+- Tests never touch the network. Website tests replay fixtures through `httpx.MockTransport`;
+  commit only synthetic fixtures (fictional companies, `*.example`). Real-site recordings stay
+  in the git-ignored `tests/fixtures/websites/recorded/` (SPEC.md D12).
+- `uv run ruff check .` and `uv run ruff format --check .` must be clean.
 
 ## Database
 
@@ -99,8 +111,10 @@ Without a `.codegraph/` directory, skip CodeGraph; indexing is the developer's c
 
 ```bash
 make test-go        # Go unit, contract and store integration tests (needs `make up`)
+make test-ai        # Python unit tests (offline: fake LLM, website fixtures)
 make test-web       # svelte-check
 make openapi-check  # generated API code is current
+make proto-check    # generated gRPC code is current
 ```
 
 For UI changes, also exercise the change in a browser: `make up`, `make api`, `make web`.

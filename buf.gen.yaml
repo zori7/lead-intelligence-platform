@@ -1,0 +1,12 @@
+# Go code generation (`make proto`). Plugins are pinned and installed into .bin/
+# by the Makefile. Python code is generated with grpcio-tools (see Makefile).
+version: v2
+inputs:
+  - directory: proto
+plugins:
+  - local: protoc-gen-go
+    out: backend/gen
+    opt: module=leadintel/backend/gen
+  - local: protoc-gen-go-grpc
+    out: backend/gen
+    opt: module=leadintel/backend/gen

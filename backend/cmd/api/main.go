@@ -18,11 +18,16 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
+	"github.com/google/uuid"
+
+	"leadintel/backend/internal/aiclient"
+	"leadintel/backend/internal/analysis"
 	"leadintel/backend/internal/api"
 	"leadintel/backend/internal/config"
 	"leadintel/backend/internal/db"
 	"leadintel/backend/internal/httpx"
 	"leadintel/backend/internal/lead"
+	"leadintel/backend/internal/llmsettings"
 	"leadintel/backend/migrations"
 )
 
@@ -62,9 +67,42 @@ func run() error {
 		}
 	}
 
+	ai, err := aiclient.New(cfg.AIGRPCAddr)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = ai.Close() }()
+
+	leads := lead.NewStore(pool)
+	jobs := analysis.NewStore(pool)
+	settings := llmsettings.NewStore(pool)
+	worker := analysis.NewWorker(jobs, settings, ai, analysis.WorkerConfig{
+		Workers:          cfg.AnalysisWorkers,
+		Timeout:          cfg.AnalysisTimeout,
+		DispatchAttempts: cfg.AIDispatchAttempts,
+	})
+	workerCtx, stopWorkers := context.WithCancel(context.Background())
+	workersDone := make(chan struct{})
+	go func() {
+		defer close(workersDone)
+		worker.Run(workerCtx)
+	}()
+	defer func() {
+		// Cancelling marks in-flight jobs interrupted (retryable) before exit.
+		stopWorkers()
+		<-workersDone
+	}()
+
+	latest := func(ctx context.Context, id uuid.UUID) (any, error) { return jobs.Latest(ctx, id) }
+	handlers := server{
+		Handler:         lead.NewHandler(leads, latest),
+		analysisHandler: analysis.NewHandler(jobs, leads, settings, worker),
+		settingsHandler: llmsettings.NewHandler(settings, ai),
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.APIAddr,
-		Handler:           newRouter(pool),
+		Handler:           newRouter(pool, handlers, cfg.AdminToken),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		IdleTimeout:       60 * time.Second,
@@ -110,7 +148,23 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
-func newRouter(pool *pgxpool.Pool) http.Handler {
+type (
+	analysisHandler = *analysis.Handler
+	settingsHandler = *llmsettings.Handler
+)
+
+// server composes the feature handlers into one api.ServerInterface. Each
+// handler embeds api.Unimplemented; Go's embedding rules pick the shallowest
+// method, so every operation resolves to the feature that implements it.
+type server struct {
+	*lead.Handler
+	analysisHandler
+	settingsHandler
+}
+
+var _ api.ServerInterface = server{}
+
+func newRouter(pool *pgxpool.Pool, handlers api.ServerInterface, adminToken string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, httpx.RequestLogger, middleware.Recoverer)
 
@@ -137,8 +191,10 @@ func newRouter(pool *pgxpool.Pool) http.Handler {
 		// (SSE) will be mounted outside this group.
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Timeout(30 * time.Second))
+			// Every /api/admin/* route requires the admin token (fails closed for new routes).
+			r.Use(httpx.RequireAdmin(adminToken, "/api/admin/"))
 			// Routes are generated from api/openapi.yaml (internal/api).
-			api.HandlerWithOptions(lead.NewHandler(lead.NewStore(pool)), api.ChiServerOptions{
+			api.HandlerWithOptions(handlers, api.ChiServerOptions{
 				BaseRouter:       r,
 				ErrorHandlerFunc: httpx.ParamError,
 			})
