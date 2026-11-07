@@ -1,3 +1,10 @@
+# Full stack: `docker compose up --build` → http://localhost:5173
+# Development (hybrid): `make up` starts only Postgres; API, AI and web run on the host.
+#
+# Values come from .env. Container-to-container addresses (DATABASE_URL,
+# AI_GRPC_ADDR) are set here, so the host-oriented values in .env do not apply
+# inside Docker. Host ports are configurable to run next to host-run services.
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -5,8 +12,9 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-lead}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lead}
       POSTGRES_DB: ${POSTGRES_DB:-leadintel}
+    # Localhost only: for host-run tools (make api, make test-go, psql).
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -18,20 +26,55 @@ services:
   ai:
     build: ./ai
     environment:
+      GRPC_ADDR: 0.0.0.0:50051
       LLM_BASE_URL: ${LLM_BASE_URL:?set LLM_BASE_URL in .env}
       LLM_API_KEY: ${LLM_API_KEY:-local}
       LLM_STRUCTURED_OUTPUT_METHOD: ${LLM_STRUCTURED_OUTPUT_METHOD:-json_schema}
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-120}
+      LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-4}
       MAX_CONCURRENT_ANALYSES: ${MAX_CONCURRENT_ANALYSES:-4}
       ICP_DESCRIPTION: ${ICP_DESCRIPTION:-}
       WEB_FETCH_ENABLED: ${WEB_FETCH_ENABLED:-true}
+      WEB_FETCH_TIMEOUT_SECONDS: ${WEB_FETCH_TIMEOUT_SECONDS:-10}
+      WEB_FETCH_MAX_CHARS: ${WEB_FETCH_MAX_CHARS:-6000}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     # Reaches an LLM server on the host (needed on Linux, harmless on macOS).
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # Published on localhost only, so a host-run API (make api) can reach it.
+    # Localhost only, so a host-run API (make api) can reach it. The gRPC port
+    # has no authentication and is never exposed beyond this machine.
     ports:
-      - "127.0.0.1:50051:50051"
+      - "127.0.0.1:${AI_PORT:-50051}:50051"
+    # The image defines the gRPC health check (python -m lead_ai.healthcheck).
+
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-lead}:${POSTGRES_PASSWORD:-lead}@postgres:5432/${POSTGRES_DB:-leadintel}?sslmode=disable
+      API_ADDR: :8080
+      AI_GRPC_ADDR: ai:50051
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN in .env (openssl rand -hex 24)}
+      MIGRATE_ON_START: ${MIGRATE_ON_START:-true}
+      ANALYSIS_WORKERS: ${ANALYSIS_WORKERS:-2}
+      ANALYSIS_TIMEOUT: ${ANALYSIS_TIMEOUT:-300s}
+      AI_DISPATCH_ATTEMPTS: ${AI_DISPATCH_ATTEMPTS:-3}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "127.0.0.1:${API_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ai:
+        condition: service_healthy
+    # The image defines the /healthz check (the binary probes itself).
+
+  web:
+    build: ./frontend
+    ports:
+      - "127.0.0.1:${WEB_PORT:-5173}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
 
 volumes:
   pgdata:

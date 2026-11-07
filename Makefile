@@ -6,7 +6,7 @@ export
 
 TEST_DATABASE_URL ?= postgres://lead:lead@localhost:5432/leadintel_test?sslmode=disable
 
-.PHONY: help up down db api ai web openapi openapi-check proto proto-check tools \
+.PHONY: help stack logs up down db api ai web openapi openapi-check proto proto-check tools \
 	test test-go test-ai test-web lint record-websites
 
 # Pinned code generators, installed into .bin/ (git-ignored) on first use.
@@ -18,7 +18,13 @@ PROTOC_GEN_GO_GRPC_VERSION := v1.6.2
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-10s %s\n", $$1, $$2}'
 
-up: ## Start infrastructure (Postgres) in Docker
+stack: ## Build and start the full stack in Docker (http://localhost:5173)
+	docker compose up --build -d --wait
+
+logs: ## Follow the logs of all containers
+	docker compose logs -f
+
+up: ## Start only Postgres in Docker (for host-run services)
 	docker compose up -d --wait postgres
 
 down: ## Stop all containers

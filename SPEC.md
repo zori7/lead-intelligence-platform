@@ -1231,11 +1231,11 @@ Rules:
 | Data residency | Lead data goes only to the configured `LLM_BASE_URL`, which is local by default. The website fetch sends **no lead data**: it is a plain `GET` of the lead's own URL. It does reveal to that site's operator that this machine requested the page. | Document the implications if a hosted provider is configured. Optional egress proxy for the fetch. |
 | Server-side request forgery | The website URL is user input fetched by the `ai` container. Scheme/port allowlist, public-address guard on every redirect hop, redirect cap, timeout, size cap, HTML-only (§9.7). Residual risk: DNS rebinding between the check and the connection. | Pin the connection to the checked address, or route fetches through an egress proxy that enforces the same policy |
 | Scraping etiquette and legal | One page per analysis, triggered by a user action, honors `robots.txt`, identifies itself with a descriptive `User-Agent`, no crawling, content not stored. `WEB_FETCH_ENABLED=false` turns it off entirely. | Per-domain rate limit if analyses are ever batched |
-| Network exposure | Only `web` (and `api` for dev) publish ports. `ai:50051` and `postgres` stay on the internal compose network. gRPC is plaintext inside it. | mTLS between services |
+| Network exposure | Every published port binds to `127.0.0.1`. `web` is the entry point; `api`, `ai:50051` and `postgres` are published on localhost only so host-run processes (`make api`, `make test-go`) can reach them, and are never reachable from other machines. gRPC is plaintext on the compose network. | Drop the dev port mappings in a deployment profile; mTLS between services |
 | Input validation | Validated in the Go API (types, lengths, enums, URL and email format), again in Python (`validate_input`), and through DB `CHECK` constraints. 64 KB body limit, unknown fields rejected. | — |
 | SQL injection | Parameterized pgx queries only. Sort is an allowlisted enum, never interpolated. | — |
 | Prompt injection | Lead fields **and website text** are delimited untrusted input. No tools or function execution, schema-validated output, results rendered as **text** (no `{@html}`). A synthetic fixture with injection text is part of the test suite. | Output moderation, if results get shared |
-| XSS | Svelte escapes by default. `{@html}` is forbidden (lint rule). CSP header in nginx: `default-src 'self'`, plus the Google Fonts origins. | — |
+| XSS | Svelte escapes by default. `{@html}` is forbidden (lint rule). CSP: `default-src 'self'` with a hash for SvelteKit's inline bootstrap script, emitted by the build as a `<meta>` tag in `index.html` (`kit.csp`, mode `hash`); `style-src` allows inline style attributes (Svelte transitions, GSAP). nginx adds the header-only directives (`frame-ancestors 'none'`). Fonts are self-hosted, so no third-party origins are allowed. | Move the policy to a header with nonces if the app gains server rendering |
 | Abuse and cost | One active job per lead, bounded worker pool, per-call and per-job timeouts, no automatic workflow retries | Per-user rate limit and token budget |
 | Data minimization | `contact_email` is never sent to Python or the LLM | Configurable PII redaction |
 | CORS | Not enabled (same-origin through the proxy). If enabled for dev, use an explicit allowlist. | — |
@@ -1279,12 +1279,14 @@ Each service parses and validates its config at startup and **exits non-zero wit
 
 | Service | Image / build | Ports (host) | Depends on | Healthcheck |
 |---|---|---|---|---|
-| `postgres` | `postgres:17-alpine`, volume `pgdata` | `5432` (dev convenience) | — | `pg_isready` |
-| `ai` | `./ai` (python:3.14-slim + uv), `extra_hosts: ["host.docker.internal:host-gateway"]` (needed on Linux, harmless on macOS). Needs outbound internet access for the website fetch (default Docker networking provides it). | `127.0.0.1:50051` (dev convenience: lets a host-run API reach it; never exposed beyond localhost) | — | `python -m lead_ai.healthcheck` (grpc health) |
-| `api` | `./backend` (multi-stage → distroless static) | `8080` | `postgres: service_healthy`, `ai: service_healthy` | `GET /healthz` |
-| `web` | `./frontend` (node build → `nginx:alpine`) | `5173 → 80` | `api` | — |
+| `postgres` | `postgres:17-alpine`, volume `pgdata` | `127.0.0.1:5432` (dev convenience) | — | `pg_isready` |
+| `ai` | `./ai` (python:3.14-slim + uv, non-root), `extra_hosts: ["host.docker.internal:host-gateway"]` (needed on Linux, harmless on macOS). Needs outbound internet access for the website fetch (default Docker networking provides it). | `127.0.0.1:50051` (dev convenience: lets a host-run API reach it; never exposed beyond localhost) | — | `python -m lead_ai.healthcheck` (grpc health) |
+| `api` | `./backend` (multi-stage → `distroless/static:nonroot`) | `127.0.0.1:8080` | `postgres: service_healthy`, `ai: service_healthy` | `/api healthcheck`: the binary probes its own `GET /healthz` (the image has no shell or curl) |
+| `web` | `./frontend` (`node:24-alpine` build → `nginx-unprivileged`, non-root, listens on 8080) | `127.0.0.1:5173 → 8080` | `api: service_healthy` | — |
 
-`nginx.conf` essentials: SPA fallback `try_files $uri /index.html`. For `location /api/`: `proxy_pass http://api:8080`, `proxy_http_version 1.1`, `proxy_buffering off`, `proxy_read_timeout 1h`, and `proxy_set_header Connection ''` (required for SSE).
+Host ports are overridable (`POSTGRES_PORT`, `AI_PORT`, `API_PORT`, `WEB_PORT`) so the stack can run next to host-run dev processes. Container-to-container addresses (`DATABASE_URL`, `AI_GRPC_ADDR`) are set in `docker-compose.yml`, so the host-oriented values in `.env` do not apply inside Docker.
+
+`nginx.conf` essentials: SPA fallback `try_files $uri /index.html` with `Cache-Control: no-cache`; long-lived caching for `/_app/immutable/`. For `location /api/`: `proxy_pass http://api:8080`, `proxy_http_version 1.1`, `proxy_buffering off`, `proxy_read_timeout 1h`, and `proxy_set_header Connection ''` (required for SSE). Security headers: `Content-Security-Policy: frame-ancestors 'none'` (the rest of the policy is the `<meta>` tag, §12), `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`.
 
 ### 13.3 Workflows
 

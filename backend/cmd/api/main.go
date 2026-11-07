@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -33,6 +34,11 @@ import (
 )
 
 func main() {
+	// The distroless image has no shell or curl, so the container health check
+	// runs the binary itself: `api healthcheck` probes /healthz on API_ADDR.
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		os.Exit(healthcheck())
+	}
 	if err := run(); err != nil {
 		slog.Error("api exited", "err", err)
 		os.Exit(1)
@@ -196,6 +202,28 @@ func readiness(checks map[string]func(context.Context) error) http.HandlerFunc {
 		}
 		httpx.WriteJSON(w, status, body)
 	}
+}
+
+// healthcheck returns 0 when the local API answers GET /healthz with 200.
+func healthcheck() int {
+	addr := os.Getenv("API_ADDR")
+	if addr == "" {
+		addr = ":8080"
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 1
+	}
+	client := http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://" + net.JoinHostPort("127.0.0.1", port) + "/healthz")
+	if err != nil {
+		return 1
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return 1
+	}
+	return 0
 }
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

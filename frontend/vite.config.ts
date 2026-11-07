@@ -13,7 +13,24 @@ export default defineConfig({
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
 			// Pure static SPA: every unknown path falls back to index.html and is routed client-side.
-			adapter: adapter({ fallback: 'index.html' })
+			adapter: adapter({ fallback: 'index.html' }),
+			// Emitted as a <meta> tag in index.html, with a hash for SvelteKit's inline
+			// bootstrap script. Inline style attributes stay allowed: Svelte transitions,
+			// GSAP and toasts set them at runtime. nginx adds the header-only directives.
+			csp: {
+				mode: 'hash',
+				directives: {
+					'default-src': ['self'],
+					'script-src': ['self'],
+					'style-src': ['self', 'unsafe-inline'],
+					'img-src': ['self', 'data:'],
+					'font-src': ['self'],
+					'connect-src': ['self'],
+					'object-src': ['none'],
+					'base-uri': ['self'],
+					'form-action': ['self']
+				}
+			}
 		})
 	],
 	test: {
