@@ -27,6 +27,7 @@ from lead_ai.web import (
     HTML_TYPES,
     MAX_BYTES,
     MAX_REDIRECTS,
+    MAX_ROBOTS_BYTES,
     USER_AGENT,
     BlockedError,
     Fetcher,
@@ -89,6 +90,10 @@ async def record(client: httpx.AsyncClient, url: str) -> str:
         content_type = resp.headers.get("content-type", "")
         if content_type.split(";")[0].strip().lower() not in HTML_TYPES:
             return f"skipped: content type {content_type!r}"
+        robots = await client.get(
+            f"{urlsplit(current).scheme}://{urlsplit(current).netloc}/robots.txt",
+            headers={"User-Agent": USER_AGENT},
+        )
         body = resp.content[:MAX_BYTES]
         html = _STRIP.sub("", body.decode(resp.charset_encoding or "utf-8", errors="replace"))
         meta = {
@@ -99,6 +104,8 @@ async def record(client: httpx.AsyncClient, url: str) -> str:
             "status": resp.status_code,
             "headers": {"content-type": "text/html; charset=utf-8"},
             "addresses": addresses,
+            # Replayed at every origin of the fixture; omitted when the site has none.
+            **({"robots_txt": robots.text[:MAX_ROBOTS_BYTES]} if robots.is_success else {}),
             "recorded_at": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
         }
         target = OUT / slug(url)

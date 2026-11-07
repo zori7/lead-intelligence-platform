@@ -1,0 +1,25 @@
+{
+  "kind": "synthetic",
+  "description": "Public host whose homepage redirects to a private address (SSRF via redirect).",
+  "url": "https://redirect-private.example/",
+  "redirects": [
+    {
+      "url": "https://redirect-private.example/",
+      "status": 302,
+      "location": "http://10.0.0.5/admin"
+    }
+  ],
+  "addresses": {
+    "redirect-private.example": [
+      "93.184.215.80"
+    ]
+  },
+  "expected": {
+    "status": "blocked",
+    "reason_contains": "not allowed",
+    "never_requested": [
+      "http://10.0.0.5/admin"
+    ]
+  },
+  "recorded_at": null
+}

@@ -1,0 +1,20 @@
+{
+  "kind": "synthetic",
+  "description": "Homepage URL serves a PDF.",
+  "url": "https://brochure.example/",
+  "final_url": "https://brochure.example/",
+  "status": 200,
+  "headers": {
+    "content-type": "application/pdf"
+  },
+  "addresses": {
+    "brochure.example": [
+      "93.184.215.84"
+    ]
+  },
+  "expected": {
+    "status": "failed",
+    "reason_contains": "did not return an HTML page"
+  },
+  "recorded_at": null
+}

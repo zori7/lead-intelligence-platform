@@ -28,28 +28,46 @@ RECORDED = FIXTURES / "recorded"
 
 
 @dataclass
+class Expected:
+    """Outcome a synthetic fixture must produce (``expected`` in response.json)."""
+
+    status: str = "fetched"
+    reason_contains: str = ""
+    never_requested: list[str] = field(default_factory=list)
+
+
+@dataclass
 class SiteFixture:
     name: str
     url: str
-    final_url: str
+    final_url: str | None  # None when the fetch never reaches a page (e.g. redirect loop)
     status: int
     headers: dict[str, str]
     body: bytes
     redirects: list[dict[str, Any]]
     addresses: dict[str, list[str]]
+    robots_txt: str | None = None  # served at every origin of the fixture
+    delay_seconds: float = 0.0  # delay before the page response
+    expected: Expected = field(default_factory=Expected)
 
 
 def load_fixture(path: Path) -> SiteFixture:
     meta = json.loads((path / "response.json").read_text())
+    body = (path / "body.html").read_bytes() if (path / "body.html").exists() else b""
+    # Oversized bodies are generated, not committed: the file is repeated.
+    body *= int(meta.get("body_repeat", 1))
     return SiteFixture(
         name=path.name,
         url=meta["url"],
-        final_url=meta["final_url"],
-        status=meta["status"],
-        headers=meta["headers"],
-        body=(path / "body.html").read_bytes(),
+        final_url=meta.get("final_url"),
+        status=meta.get("status", 200),
+        headers=meta.get("headers", {}),
+        body=body,
         redirects=meta.get("redirects", []),
         addresses=meta["addresses"],
+        robots_txt=meta.get("robots_txt"),
+        delay_seconds=float(meta.get("delay_seconds", 0)),
+        expected=Expected(**meta.get("expected", {})),
     )
 
 
@@ -68,17 +86,33 @@ class FakeWeb:
     """Routes for MockTransport plus a resolver, built from fixtures."""
 
     routes: dict[str, httpx.Response] = field(default_factory=dict)
+    delays: dict[str, float] = field(default_factory=dict)
     addresses: dict[str, list[str]] = field(default_factory=dict)
     requested: list[str] = field(default_factory=list)
 
+    @property
+    def page_requests(self) -> list[str]:
+        """Requests other than robots.txt."""
+        return [u for u in self.requested if not u.endswith("/robots.txt")]
+
     def add(self, site: SiteFixture) -> FakeWeb:
+        urls = [site.url, *(hop["url"] for hop in site.redirects)]
         for hop in site.redirects:
             self.routes[hop["url"]] = httpx.Response(
                 hop["status"], headers={"location": hop["location"]}
             )
-        self.routes[site.final_url] = httpx.Response(
-            site.status, headers=site.headers, content=site.body
-        )
+        if site.final_url is not None:
+            urls.append(site.final_url)
+            self.routes[site.final_url] = httpx.Response(
+                site.status, headers=site.headers, content=site.body
+            )
+            self.delays[site.final_url] = site.delay_seconds
+        if site.robots_txt is not None:
+            for url in urls:
+                u = httpx.URL(url)
+                self.routes[f"{u.scheme}://{u.netloc.decode()}/robots.txt"] = httpx.Response(
+                    200, headers={"content-type": "text/plain"}, content=site.robots_txt.encode()
+                )
         self.addresses.update(site.addresses)
         return self
 
@@ -89,9 +123,11 @@ class FakeWeb:
             self.addresses[host] = list(addresses)
         return self
 
-    def _handle(self, request: httpx.Request) -> httpx.Response:
+    async def _handle(self, request: httpx.Request) -> httpx.Response:
         url = str(request.url)
         self.requested.append(url)
+        if self.delays.get(url):
+            await asyncio.sleep(self.delays[url])
         if url not in self.routes:
             return httpx.Response(404, headers={"content-type": "text/html"}, content=b"not found")
         r = self.routes[url]
@@ -118,6 +154,25 @@ class Call:
 
 
 Reply = dict[str, Any] | Exception | Callable[[], Any]
+
+MALFORMED = object()
+"""Reply sentinel: the model answered, but the reply does not parse into the schema."""
+
+
+def sequence(*replies: Any) -> Callable[[], Any]:
+    """Reply with each item in turn (one per attempt); the last one repeats."""
+    items = list(replies)
+
+    def next_reply() -> Any:
+        return items.pop(0) if len(items) > 1 else items[0]
+
+    return next_reply
+
+
+def api_error(cls: type[Exception], status: int) -> Exception:
+    """An ``openai`` HTTP error as the SDK raises it, e.g. ``api_error(NotFoundError, 404)``."""
+    response = httpx.Response(status, request=httpx.Request("POST", "http://llm.invalid/v1/x"))
+    return cls(f"HTTP {status}", response=response, body=None)  # type: ignore[call-arg]
 
 
 class FakeStructuredModel(BaseChatModel):
@@ -149,6 +204,12 @@ class FakeStructuredModel(BaseChatModel):
                 reply = reply()
             if isinstance(reply, Exception):
                 raise reply
+            if reply is MALFORMED:
+                return {
+                    "raw": AIMessage(content="not json"),
+                    "parsed": None,
+                    "parsing_error": ValueError("invalid JSON"),
+                }
             raw = AIMessage(
                 content=json.dumps(reply),
                 usage_metadata={"input_tokens": 100, "output_tokens": 20, "total_tokens": 120},
@@ -199,6 +260,9 @@ class FakeLlm:
 
     def __call__(self, node: str, choice: ModelChoice) -> BaseChatModel:
         return FakeStructuredModel(node=node, choice=choice, owner=self)
+
+    def attempts(self, node: str) -> int:
+        return sum(1 for c in self.calls if c.node == node)
 
     def prompt(self, node: str) -> str:
         call = next(c for c in self.calls if c.node == node)

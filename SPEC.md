@@ -869,7 +869,7 @@ Each layer retries only what it understands, and retries never stack.
 
 | Layer | What is retried | Policy |
 |---|---|---|
-| **LLM call** (Python) | Rate limit (429), timeout, 5xx, connection errors, structured-output parse failure | `Runnable.with_retry(stop_after_attempt=LLM_MAX_ATTEMPTS=3, wait_exponential_jitter=True)`. The `ChatOpenAI(max_retries=0)` SDK retry is **disabled** so retries don't multiply (3×3). |
+| **LLM call** (Python) | Rate limit (429), timeout, 5xx, connection errors, structured-output parse failure | `Runnable.with_retry(stop_after_attempt=LLM_MAX_ATTEMPTS=4, wait_exponential_jitter=True)` with waits of 5s, 15s and 45s (plus up to 2s of jitter), so a restarting local LLM server or a model still loading has about a minute to recover. The job deadline bounds the total. The `ChatOpenAI(max_retries=0)` SDK retry is **disabled** so retries don't multiply (3×3). |
 | **Dispatch** (Go) | `UNAVAILABLE`, `RESOURCE_EXHAUSTED`, **only before the first event is received** | Up to `AI_DISPATCH_ATTEMPTS=3`, backoff 1s/2s/4s, bounded by the job deadline |
 | **Workflow** (user) | Any failed job with `retryable=true` | The user clicks "Retry", which creates a new job. Never automatic. |
 
@@ -1026,7 +1026,7 @@ The `fetch_website` node grounds `extract_company` in what the company says abou
 
 **Fixtures (`ai/tests/fixtures/websites/`):**
 
-Both kinds use the same layout, `<name>/response.json` (requested URL, final URL, redirect chain, status, headers, `robots.txt` body, recording date) and `<name>/body.html`, and the same loader.
+Both kinds use the same layout, `<name>/response.json` (requested URL, final URL, redirect chain, status, headers, resolved addresses, `robots.txt` body, recording date) and `<name>/body.html`, and the same loader. Synthetic fixtures also declare the outcome they must produce (`expected`: status, a fragment of the user-safe reason, and URLs that must never be requested) and may set `delay_seconds` (slow server) or `body_repeat` (an oversized body generated at load time instead of committed).
 
 - **Synthetic (committed, run in CI):** hand-written pages for fictional companies on reserved domains (`*.example`). They cover the happy path with realistic markup (navigation, footer, inline scripts and styles, `og:` tags) and the edge paths: redirect to a private address, redirect loop, `robots.txt` disallow, non-HTML content type, oversized body, client-rendered shell with almost no text, and a page containing prompt-injection text. They contain no third-party content, so the repository redistributes nothing.
 - **Recorded (local only, git-ignored):** `ai/scripts/record_websites.py` fetches a short list of real company homepages **once** with the production fetcher and writes them to `ai/tests/fixtures/websites/recorded/`. It strips `<script>`, `<style>`, `<svg>` and comments before saving, to keep fixtures small. It is run by hand (`make record-websites`) when fixtures need refreshing, never by tests or CI. Tests marked `recorded` run over every recorded site and **skip** when the directory is empty, so a fresh clone and CI pass without them.
@@ -1262,7 +1262,7 @@ Rules:
 | `LLM_API_KEY` | ai | `local` | Dummy by default (local servers ignore it) |
 | `LLM_STRUCTURED_OUTPUT_METHOD` | ai | `json_schema` | `json_schema` \| `function_calling` \| `json_mode` |
 | `LLM_TIMEOUT_SECONDS` | ai | `120` | Per-call timeout |
-| `LLM_MAX_ATTEMPTS` | ai | `3` | Per-call attempts |
+| `LLM_MAX_ATTEMPTS` | ai | `4` | Per-call attempts (waits 5s, 15s, 45s between them) |
 | `MAX_CONCURRENT_ANALYSES` | ai | `4` | gRPC concurrency cap |
 | `ICP_DESCRIPTION` | ai | *B2B SaaS, 50–1000 employees, …* | Ideal customer profile used by `analyze_fit` |
 | `WEB_FETCH_ENABLED` | ai | `true` | Fetch the lead's website (§9.7). `false` for offline use; results then report `disabled`. |

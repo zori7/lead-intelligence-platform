@@ -1,0 +1,30 @@
+{
+  "kind": "synthetic",
+  "description": "Two pages that redirect to each other.",
+  "url": "https://loop-a.example/",
+  "redirects": [
+    {
+      "url": "https://loop-a.example/",
+      "status": 302,
+      "location": "https://loop-b.example/"
+    },
+    {
+      "url": "https://loop-b.example/",
+      "status": 302,
+      "location": "https://loop-a.example/"
+    }
+  ],
+  "addresses": {
+    "loop-a.example": [
+      "93.184.215.81"
+    ],
+    "loop-b.example": [
+      "93.184.215.82"
+    ]
+  },
+  "expected": {
+    "status": "failed",
+    "reason_contains": "redirects too many times"
+  },
+  "recorded_at": null
+}

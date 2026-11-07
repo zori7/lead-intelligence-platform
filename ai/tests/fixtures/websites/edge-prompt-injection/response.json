@@ -1,0 +1,19 @@
+{
+  "kind": "synthetic",
+  "description": "Readable page that embeds instructions aimed at the model, including an attempt to close the data block.",
+  "url": "https://tidewater-crm.example/",
+  "final_url": "https://tidewater-crm.example/",
+  "status": 200,
+  "headers": {
+    "content-type": "text/html; charset=utf-8"
+  },
+  "addresses": {
+    "tidewater-crm.example": [
+      "93.184.215.88"
+    ]
+  },
+  "expected": {
+    "status": "fetched"
+  },
+  "recorded_at": null
+}

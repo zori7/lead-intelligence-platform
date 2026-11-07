@@ -8,20 +8,25 @@ defaults in this service. Tests inject fakes through
 
 from __future__ import annotations
 
+import itertools
+import logging
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
+import openai
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
-from langchain_core.runnables import Runnable, RunnableConfig
+from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, SecretStr
 
 from lead_ai.config import Settings, get_settings
 from lead_ai.errors import StructuredOutputError
+
+log = logging.getLogger(__name__)
 
 LLM_NODES: tuple[str, ...] = (
     "extract_company",
@@ -56,7 +61,7 @@ def _client(choice: ModelChoice, settings: Settings) -> ChatOpenAI:
                 model=choice.model,
                 temperature=choice.temperature,
                 timeout=settings.llm_timeout_seconds,
-                # Retries live in one place (with_retry, M4); SDK retries would multiply them.
+                # Retries live in one place (structured()); SDK retries would multiply them.
                 max_retries=0,
             )
             _cache[key] = llm
@@ -84,29 +89,85 @@ class StructuredReply[T: BaseModel]:
     output_tokens: int
 
 
-async def invoke_structured[T: BaseModel](
-    llm: BaseChatModel, schema: type[T], messages: list[Any], config: RunnableConfig
-) -> StructuredReply[T]:
-    """Call ``llm`` and parse the reply into ``schema``.
+# Transient failures worth another attempt (SPEC.md §8.4). Configuration errors
+# (401/403/404) and bad requests are not retried: another attempt cannot fix them.
+RETRYABLE: tuple[type[BaseException], ...] = (
+    openai.APIConnectionError,  # includes APITimeoutError
+    openai.RateLimitError,
+    openai.InternalServerError,
+    StructuredOutputError,
+)
 
-    ``include_raw=True`` keeps the raw message so token usage can be reported
-    and a parse failure surfaces as :class:`StructuredOutputError` instead of a
-    bare exception from deep inside the parser.
+# Backoff between attempts (tenacity wait_exponential_jitter): 5s, 15s, 45s, plus up
+# to 2s of jitter. Long waits give a local LLM server time to restart or finish
+# loading a model; the job deadline (ANALYSIS_TIMEOUT) still bounds the total.
+# Tests set it to zero.
+RETRY_WAIT: dict[str, float] = {"multiplier": 5.0, "exp_base": 3.0, "max": 45.0, "jitter": 2.0}
+
+
+def structured[T: BaseModel](
+    llm: BaseChatModel, schema: type[T], *, node: str, max_attempts: int | None = None
+) -> Runnable[list[Any], StructuredReply[T]]:
+    """``llm`` bound to ``schema``, with retries for transient failures.
+
+    One attempt is: call the model, parse the reply into ``schema``. A reply that
+    does not parse raises :class:`StructuredOutputError`, so malformed JSON is
+    retried like a dropped connection. ``include_raw=True`` keeps the raw message
+    for token usage. Every failed attempt is logged with the node and the error
+    type, never with the prompt or the reply.
     """
-    method = get_settings().llm_structured_output_method
-    runnable: Runnable[Any, dict[str, Any]] = llm.with_structured_output(
-        schema, method=method, include_raw=True
+    settings = get_settings()
+    bound: Runnable[Any, dict[str, Any]] = llm.with_structured_output(
+        schema, method=settings.llm_structured_output_method, include_raw=True
     )
-    out = await runnable.ainvoke(messages, config=config)
-    if out.get("parsing_error") is not None or out.get("parsed") is None:
-        raise StructuredOutputError(str(out.get("parsing_error") or "empty structured output"))
-    raw = out.get("raw")
-    usage = raw.usage_metadata if isinstance(raw, AIMessage) and raw.usage_metadata else None
-    return StructuredReply(
-        value=out["parsed"],
-        input_tokens=usage["input_tokens"] if usage else 0,
-        output_tokens=usage["output_tokens"] if usage else 0,
+    attempts = max_attempts or settings.llm_max_attempts
+    counter = itertools.count(1)
+
+    async def attempt(messages: list[Any], config: RunnableConfig) -> StructuredReply[T]:
+        n = next(counter)
+        try:
+            out = await bound.ainvoke(messages, config=config)
+            if out.get("parsing_error") is not None or out.get("parsed") is None:
+                raise StructuredOutputError(
+                    type(out.get("parsing_error")).__name__
+                    if out.get("parsing_error") is not None
+                    else "empty structured output"
+                )
+        except Exception as exc:
+            retry = isinstance(exc, RETRYABLE) and n < attempts
+            log.warning(
+                "llm attempt failed",
+                extra={
+                    "node": node,
+                    "attempt": n,
+                    "max_attempts": attempts,
+                    "error": type(exc).__name__,
+                    "will_retry": retry,
+                },
+            )
+            raise
+        raw = out.get("raw")
+        usage = raw.usage_metadata if isinstance(raw, AIMessage) and raw.usage_metadata else None
+        return StructuredReply(
+            value=out["parsed"],
+            input_tokens=usage["input_tokens"] if usage else 0,
+            output_tokens=usage["output_tokens"] if usage else 0,
+        )
+
+    return RunnableLambda(attempt, name=f"{node}_attempt").with_retry(
+        retry_if_exception_type=RETRYABLE,
+        stop_after_attempt=attempts,
+        wait_exponential_jitter=True,
+        exponential_jitter_params=dict(RETRY_WAIT),  # type: ignore[arg-type]
     )
+
+
+async def invoke_structured[T: BaseModel](
+    config: RunnableConfig, node: str, schema: type[T], messages: list[Any]
+) -> StructuredReply[T]:
+    """Run ``node``'s configured model on ``messages`` and parse into ``schema``."""
+    runnable = structured(for_node(config, node), schema, node=node)
+    return await runnable.ainvoke(messages, config=config)
 
 
 class LlmUnavailableError(Exception):

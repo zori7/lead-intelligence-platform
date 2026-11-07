@@ -1,0 +1,20 @@
+{
+  "kind": "synthetic",
+  "description": "Client-rendered single-page app shell: almost no text without JavaScript.",
+  "url": "https://spa-shell.example/",
+  "final_url": "https://spa-shell.example/",
+  "status": 200,
+  "headers": {
+    "content-type": "text/html"
+  },
+  "addresses": {
+    "spa-shell.example": [
+      "93.184.215.86"
+    ]
+  },
+  "expected": {
+    "status": "failed",
+    "reason_contains": "too little readable text"
+  },
+  "recorded_at": null
+}

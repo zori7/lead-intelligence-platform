@@ -1,0 +1,20 @@
+{
+  "kind": "synthetic",
+  "description": "Body larger than the 1 MB cap (body.html repeated); read up to the cap, not rejected.",
+  "url": "https://quartzline.example/",
+  "final_url": "https://quartzline.example/",
+  "status": 200,
+  "headers": {
+    "content-type": "text/html; charset=utf-8"
+  },
+  "body_repeat": 4000,
+  "addresses": {
+    "quartzline.example": [
+      "93.184.215.85"
+    ]
+  },
+  "expected": {
+    "status": "fetched"
+  },
+  "recorded_at": null
+}

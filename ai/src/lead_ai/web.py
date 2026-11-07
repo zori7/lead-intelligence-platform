@@ -1,12 +1,12 @@
 """Website fetch for the ``fetch_website`` node (SPEC.md §9.7).
 
 Fetches one page, the lead's website URL, and reduces it to readable text.
-Every request (the initial URL and each redirect hop) passes the same guard:
-http(s) on ports 80/443 only, and the host must resolve exclusively to public
-addresses. Errors never escape :meth:`Fetcher.fetch`; they become a
-:class:`FetchStatus`.
-
-Not yet implemented (M4): robots.txt handling.
+Every request (``robots.txt``, the initial URL and each redirect hop) passes the
+same guard: http(s) on ports 80/443 only, and the host must resolve exclusively
+to public addresses. ``robots.txt`` is read once per origin the fetch reaches.
+The whole fetch shares one timeout budget. Errors never escape
+:meth:`Fetcher.fetch`; they become a :class:`FetchStatus` plus a user-safe
+``reason``.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit
+from urllib.robotparser import RobotFileParser
 
 import httpx
 
@@ -29,6 +30,7 @@ log = logging.getLogger(__name__)
 
 USER_AGENT = "LeadIntelBot/0.1 (+https://github.com/zori7/lead-intelligence-platform)"
 MAX_BYTES = 1 << 20
+MAX_ROBOTS_BYTES = 64 << 10
 MAX_REDIRECTS = 3
 MIN_TEXT_CHARS = 200
 HTML_TYPES = ("text/html", "application/xhtml+xml")
@@ -49,6 +51,7 @@ class WebsiteContent:
     title: str = ""
     description: str = ""
     text: str = ""
+    reason: str = ""  # user-safe explanation when not fetched
 
     @property
     def fetched(self) -> bool:
@@ -83,11 +86,22 @@ def is_public_address(addr: str) -> bool:
 
 
 class BlockedError(Exception):
-    """The URL is not allowed to be fetched."""
+    """The URL must not be fetched. ``reason`` is user-safe; ``str(exc)`` is for logs."""
+
+    def __init__(self, detail: str, reason: str = "The website address is not allowed.") -> None:
+        super().__init__(detail)
+        self.reason = reason
 
 
 class FetchError(Exception):
-    """The page could not be fetched or contains no usable text."""
+    """The page could not be fetched or has no usable text."""
+
+    def __init__(self, detail: str, reason: str = "The website could not be read.") -> None:
+        super().__init__(detail)
+        self.reason = reason
+
+
+_ROBOTS_REASON = "The website does not allow automated access."
 
 
 class Fetcher:
@@ -110,14 +124,19 @@ class Fetcher:
             async with asyncio.timeout(self._timeout):
                 result = await self._fetch(url)
         except BlockedError as exc:
-            result, reason = WebsiteContent(FetchStatus.BLOCKED), str(exc)
-        except (FetchError, httpx.HTTPError, TimeoutError, UnicodeError) as exc:
-            result, reason = (
-                WebsiteContent(FetchStatus.FAILED),
-                type(exc).__name__ + ": " + str(exc),
+            result, detail = WebsiteContent(FetchStatus.BLOCKED, reason=exc.reason), str(exc)
+        except FetchError as exc:
+            result, detail = WebsiteContent(FetchStatus.FAILED, reason=exc.reason), str(exc)
+        except TimeoutError:
+            result = WebsiteContent(
+                FetchStatus.FAILED, reason="The website did not respond in time."
             )
+            detail = f"timeout after {self._timeout}s"
+        except (httpx.HTTPError, UnicodeError) as exc:
+            result = WebsiteContent(FetchStatus.FAILED, reason="The website could not be reached.")
+            detail = f"{type(exc).__name__}: {exc}"
         else:
-            reason = ""
+            detail = ""
         log.info(
             "website fetch",
             extra={
@@ -125,39 +144,48 @@ class Fetcher:
                 "host": urlsplit(result.final_url or url).hostname,
                 "chars": len(result.text),
                 "duration_ms": int((time.monotonic() - start) * 1000),
-                "reason": reason[:200],
+                "detail": detail[:200],
             },
         )
         return result
 
     async def _fetch(self, url: str) -> WebsiteContent:
+        robots: dict[str, RobotFileParser | None] = {}
         for _ in range(MAX_REDIRECTS + 1):
             await self._check(url)
-            request = self._client.build_request(
-                "GET",
-                url,
-                headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
-            )
-            response = await self._client.send(request, stream=True, follow_redirects=False)
+            origin = _origin(url)
+            if origin not in robots:
+                robots[origin] = await self._robots(origin)
+            rules = robots[origin]
+            if rules is not None and not rules.can_fetch(USER_AGENT, url):
+                raise BlockedError("disallowed by robots.txt", _ROBOTS_REASON)
+
+            response = await self._send(url, "text/html,application/xhtml+xml")
             try:
                 if response.is_redirect:
-                    location = response.headers.get("location")
-                    if not location:
-                        raise FetchError("redirect without location")
-                    url = urljoin(url, location)
+                    url = _redirect_target(url, response)
                     continue
                 if not response.is_success:
-                    raise FetchError(f"HTTP {response.status_code}")
+                    raise FetchError(
+                        f"HTTP {response.status_code}",
+                        f"The website returned an error (HTTP {response.status_code}).",
+                    )
                 content_type = response.headers.get("content-type", "").split(";")[0].strip()
                 if content_type.lower() not in HTML_TYPES:
-                    raise FetchError(f"content type {content_type or 'missing'}")
+                    raise FetchError(
+                        f"content type {content_type or 'missing'}",
+                        "The website did not return an HTML page.",
+                    )
                 body = await _read_capped(response, MAX_BYTES)
                 html = body.decode(response.charset_encoding or "utf-8", errors="replace")
             finally:
                 await response.aclose()
             page = extract(html, self._max_chars)
             if len(page.text) < MIN_TEXT_CHARS:
-                raise FetchError("page has too little readable text")
+                raise FetchError(
+                    f"only {len(page.text)} characters of text",
+                    "The website has too little readable text (it may require JavaScript).",
+                )
             return WebsiteContent(
                 FetchStatus.FETCHED,
                 final_url=url,
@@ -165,7 +193,41 @@ class Fetcher:
                 description=page.description,
                 text=page.text,
             )
-        raise FetchError("too many redirects")
+        raise FetchError("too many redirects", "The website redirects too many times.")
+
+    async def _robots(self, origin: str) -> RobotFileParser | None:
+        """Rules from ``{origin}/robots.txt``; ``None`` (allow) when missing or unreadable.
+
+        Fetched under the same guard and redirect limit as the page. A redirect to
+        a disallowed address or any other error counts as unreadable, so it allows
+        the page fetch, which is guarded on its own.
+        """
+        url = origin + "/robots.txt"
+        try:
+            for _ in range(MAX_REDIRECTS + 1):
+                await self._check(url)
+                response = await self._send(url, "text/plain")
+                try:
+                    if response.is_redirect:
+                        url = _redirect_target(url, response)
+                        continue
+                    if not response.is_success:
+                        return None
+                    body = await _read_capped(response, MAX_ROBOTS_BYTES)
+                finally:
+                    await response.aclose()
+                rules = RobotFileParser()
+                rules.parse(body.decode("utf-8", errors="replace").splitlines())
+                return rules
+        except (BlockedError, FetchError, httpx.HTTPError) as exc:
+            log.info("robots.txt unreadable", extra={"detail": f"{type(exc).__name__}: {exc}"})
+        return None
+
+    async def _send(self, url: str, accept: str) -> httpx.Response:
+        request = self._client.build_request(
+            "GET", url, headers={"User-Agent": USER_AGENT, "Accept": accept}
+        )
+        return await self._client.send(request, stream=True, follow_redirects=False)
 
     async def _check(self, url: str) -> None:
         parts = urlsplit(url)
@@ -189,11 +251,25 @@ class Fetcher:
             try:
                 addrs = await self._resolve(host)
             except OSError as exc:
-                raise FetchError(f"cannot resolve host: {exc}") from exc
+                raise FetchError(
+                    f"cannot resolve host: {exc}", "The website address could not be found."
+                ) from exc
         if not addrs:
-            raise FetchError("host has no addresses")
+            raise FetchError("host has no addresses", "The website address could not be found.")
         if not all(is_public_address(a) for a in addrs):
             raise BlockedError("host resolves to a non-public address")
+
+
+def _origin(url: str) -> str:
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+def _redirect_target(url: str, response: httpx.Response) -> str:
+    location = response.headers.get("location")
+    if not location:
+        raise FetchError("redirect without location")
+    return urljoin(url, location)
 
 
 async def _read_capped(response: httpx.Response, limit: int) -> bytes:

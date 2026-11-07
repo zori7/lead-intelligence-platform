@@ -138,6 +138,14 @@
 								</p>
 								{#if current.error}
 									<p class="text-muted-foreground">{current.error.message}</p>
+									{#if current.error.code === 'provider_config'}
+										<p class="text-sm text-muted-foreground">
+											An admin can change the models in <a
+												href="/admin"
+												class="text-sky-300 hover:underline">model settings</a
+											>.
+										</p>
+									{/if}
 								{/if}
 							</div>
 							{#if current.error?.retryable && !viewingPast}

@@ -142,17 +142,10 @@ async def fetch_website(state: AnalysisState, config: RunnableConfig) -> dict[st
 
     update: dict[str, Any] = {"website": site}
     if not site.fetched:
-        update["warnings"] = [_website_warning(site.status)]
+        reason = site.reason or "The website could not be read."
+        update["warnings"] = [f"{reason} Insights are inferred from lead data."]
         update[STEP_STATE] = "failed"
     return update
-
-
-def _website_warning(status: web.FetchStatus) -> str:
-    if status is web.FetchStatus.BLOCKED:
-        return (
-            "Website was not fetched (address not allowed); insights are inferred from lead data."
-        )
-    return "Website could not be read; insights are inferred from lead data."
 
 
 # ---- LLM nodes ------------------------------------------------------------------
@@ -162,20 +155,54 @@ def _usage(node: str, reply: llm.StructuredReply[Any]) -> list[TokenUsage]:
     return [TokenUsage(node, reply.input_tokens, reply.output_tokens)]
 
 
+def _log_node_failure(node: str, choice: llm.ModelChoice, failure: Failure, exc: Exception) -> None:
+    # The error type and code only: provider responses may echo the prompt.
+    log.warning(
+        "llm node failed",
+        extra={
+            "node": node,
+            "model": choice.model,
+            "code": failure.code.value,
+            "error": type(exc).__name__,
+        },
+    )
+
+
+def _degraded(node: str, choice: llm.ModelChoice, exc: Exception, what: str) -> dict[str, Any]:
+    """State update for a non-critical LLM node that failed after its retries.
+
+    The run continues without this part (§9.3). The warning says whether a
+    retry may help or the model settings need attention. The model is still
+    recorded, so the result footer shows which model failed.
+    """
+    failure = classify(exc)
+    _log_node_failure(node, choice, failure, exc)
+    if failure.code is ErrorCode.PROVIDER_CONFIG:
+        warning = f"{what} unavailable: the configured model could not be used. Check /admin."
+    else:
+        warning = f"{what} unavailable: the AI provider failed. Retrying may help."
+    return {
+        "warnings": [warning],
+        "node_models": {node: choice.model},
+        STEP_STATE: "failed",
+    }
+
+
 @tracked("extract_company")
 async def extract_company(state: AnalysisState, config: RunnableConfig) -> dict[str, Any]:
     lead = state["lead"]
     choice = llm.model_choice(config, "extract_company")
     try:
         reply = await llm.invoke_structured(
-            llm.for_node(config, "extract_company"),
+            config,
+            "extract_company",
             CompanyExtraction,
             prompts.extract_company(lead, state.get("website")),
-            config,
         )
     except Exception as exc:
-        log.warning("extract_company failed", extra={"error": type(exc).__name__}, exc_info=exc)
-        return {"failure": classify(exc), STEP_STATE: "failed"}
+        failure = classify(exc)
+        _log_node_failure("extract_company", choice, failure, exc)
+        return {"failure": failure, STEP_STATE: "failed"}
     company = CompanyInsights(name=lead.company_name, **reply.value.model_dump())
     return {
         "company": company,
@@ -191,14 +218,13 @@ async def analyze_fit(state: AnalysisState, config: RunnableConfig) -> dict[str,
     assert company is not None
     try:
         reply = await llm.invoke_structured(
-            llm.for_node(config, "analyze_fit"),
+            config,
+            "analyze_fit",
             FitAnalysis,
             prompts.analyze_fit(state["lead"], company, get_settings().icp_description),
-            config,
         )
     except Exception as exc:
-        log.warning("analyze_fit failed", extra={"error": type(exc).__name__}, exc_info=exc)
-        return {"fit": None, "warnings": ["Fit analysis failed."], STEP_STATE: "failed"}
+        return {"fit": None, **_degraded("analyze_fit", choice, exc, "Fit analysis")}
     return {
         "fit": reply.value,
         "usage": _usage("analyze_fit", reply),
@@ -213,14 +239,13 @@ async def analyze_intent(state: AnalysisState, config: RunnableConfig) -> dict[s
     assert company is not None
     try:
         reply = await llm.invoke_structured(
-            llm.for_node(config, "analyze_intent"),
+            config,
+            "analyze_intent",
             IntentAnalysis,
             prompts.analyze_intent(state["lead"], company),
-            config,
         )
     except Exception as exc:
-        log.warning("analyze_intent failed", extra={"error": type(exc).__name__}, exc_info=exc)
-        return {"intent": None, "warnings": ["Intent analysis failed."], STEP_STATE: "failed"}
+        return {"intent": None, **_degraded("analyze_intent", choice, exc, "Intent analysis")}
     return {
         "intent": reply.value,
         "usage": _usage("analyze_intent", reply),
@@ -242,7 +267,9 @@ async def score_lead(state: AnalysisState, config: RunnableConfig) -> dict[str, 
             retryable=True,
         )
         return {"score": None, "failure": failure, STEP_STATE: "failed"}
-    return {"score": outcome.score, "warnings": outcome.warnings}
+    # outcome.warnings ("fit unavailable") are not added: the failed branch has
+    # already recorded a more specific warning.
+    return {"score": outcome.score}
 
 
 @tracked("generate_recommendations")
@@ -252,7 +279,8 @@ async def generate_recommendations(state: AnalysisState, config: RunnableConfig)
     assert company is not None and score is not None
     try:
         reply = await llm.invoke_structured(
-            llm.for_node(config, "generate_recommendations"),
+            config,
+            "generate_recommendations",
             RecommendationsOutput,
             prompts.generate_recommendations(
                 state["lead"],
@@ -262,16 +290,11 @@ async def generate_recommendations(state: AnalysisState, config: RunnableConfig)
                 score.value,
                 score.tier,
             ),
-            config,
         )
     except Exception as exc:
-        log.warning(
-            "generate_recommendations failed", extra={"error": type(exc).__name__}, exc_info=exc
-        )
         return {
             "recommendations": [],
-            "warnings": ["Recommendations could not be generated."],
-            STEP_STATE: "failed",
+            **_degraded("generate_recommendations", choice, exc, "Recommendations"),
         }
     return {
         "summary": reply.value.summary,

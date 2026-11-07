@@ -1,0 +1,21 @@
+{
+  "kind": "synthetic",
+  "description": "Server responds after 5 s; the fetch must give up at its timeout budget.",
+  "url": "https://slow-server.example/",
+  "final_url": "https://slow-server.example/",
+  "status": 200,
+  "headers": {
+    "content-type": "text/html"
+  },
+  "delay_seconds": 5,
+  "addresses": {
+    "slow-server.example": [
+      "93.184.215.87"
+    ]
+  },
+  "expected": {
+    "status": "failed",
+    "reason_contains": "did not respond in time"
+  },
+  "recorded_at": null
+}

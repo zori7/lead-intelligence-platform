@@ -5,7 +5,16 @@
   "final_url": "https://brightleaf-bakery.example/",
   "redirects": [],
   "status": 200,
-  "headers": { "content-type": "text/html; charset=iso-8859-1" },
-  "addresses": { "brightleaf-bakery.example": ["93.184.215.20"] },
-  "recorded_at": null
+  "headers": {
+    "content-type": "text/html; charset=iso-8859-1"
+  },
+  "addresses": {
+    "brightleaf-bakery.example": [
+      "93.184.215.20"
+    ]
+  },
+  "recorded_at": null,
+  "expected": {
+    "status": "fetched"
+  }
 }

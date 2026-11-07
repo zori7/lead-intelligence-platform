@@ -31,7 +31,7 @@ class Settings(BaseSettings):
         "json_schema"
     )
     llm_timeout_seconds: float = Field(default=120, gt=0, le=600)
-    llm_max_attempts: int = Field(default=3, ge=1, le=10)
+    llm_max_attempts: int = Field(default=4, ge=1, le=10)
 
     max_concurrent_analyses: int = Field(default=4, ge=1, le=64)
     icp_description: str = Field(default=DEFAULT_ICP, min_length=1, max_length=2000)
