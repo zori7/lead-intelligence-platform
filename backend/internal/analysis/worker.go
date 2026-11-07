@@ -16,7 +16,7 @@ import (
 // JobStore is the persistence the worker depends on (implemented by *Store).
 type JobStore interface {
 	ClaimNext(ctx context.Context, models llmsettings.Resolved) (Job, bool, error)
-	AddDispatchAttempt(ctx context.Context, id uuid.UUID) error
+	AddDispatchAttempt(ctx context.Context, id uuid.UUID) (bool, error)
 	UpdateProgress(ctx context.Context, id uuid.UUID, steps []Step, progress int) (bool, error)
 	Complete(ctx context.Context, id uuid.UUID, steps []Step, result api.AnalysisResult) (Job, bool, error)
 	Fail(ctx context.Context, id uuid.UUID, steps []Step, e JobError) (Job, bool, error)
@@ -58,6 +58,11 @@ func (c WorkerConfig) withDefaults() WorkerConfig {
 	return c
 }
 
+// errStopped is the cancellation cause when a job stops running underneath
+// its worker: a user cancelled it or its lead was deleted. The job already has
+// its final state, so the worker records nothing.
+var errStopped = errors.New("analysis job stopped")
+
 // terminalWriteTimeout bounds the final status write, which must happen even
 // after the job's own deadline has passed.
 const terminalWriteTimeout = 5 * time.Second
@@ -72,10 +77,42 @@ type Worker struct {
 	events   Publisher
 	cfg      WorkerConfig
 	wake     chan struct{}
+
+	mu      sync.Mutex
+	running map[uuid.UUID]context.CancelCauseFunc // cancel registry: jobs this process is running
 }
 
 func NewWorker(store JobStore, settings SettingsSource, ai Analyzer, events Publisher, cfg WorkerConfig) *Worker {
-	return &Worker{store: store, settings: settings, ai: ai, events: events, cfg: cfg.withDefaults(), wake: make(chan struct{}, 1)}
+	return &Worker{
+		store: store, settings: settings, ai: ai, events: events, cfg: cfg.withDefaults(),
+		wake: make(chan struct{}, 1), running: map[uuid.UUID]context.CancelCauseFunc{},
+	}
+}
+
+// Cancel aborts the job's AI run if this process is running it. The caller
+// has already moved the job to its final state in the database; the abort
+// cancels the gRPC stream, which cancels the run in the AI service.
+//
+// A cancel that lands between the claim and the registration below is still
+// caught: the worker's first write after registering (AddDispatchAttempt) is
+// conditional on status = 'running' and stops the job.
+func (w *Worker) Cancel(jobID uuid.UUID) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if cancel, ok := w.running[jobID]; ok {
+		cancel(errStopped)
+	}
+}
+
+func (w *Worker) register(jobID uuid.UUID, cancel context.CancelCauseFunc) func() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.running[jobID] = cancel
+	return func() {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		delete(w.running, jobID)
+	}
 }
 
 // Wake signals that a job may be waiting. It never blocks.
@@ -143,7 +180,10 @@ func (w *Worker) processNext(ctx context.Context) bool {
 // a terminal state: completed or failed by the AI service, or failed here.
 func (w *Worker) run(ctx context.Context, job Job) {
 	log := slog.With("job_id", job.ID, "lead_id", job.LeadID)
-	jobCtx, cancel := context.WithTimeout(ctx, w.cfg.Timeout)
+	stopCtx, stop := context.WithCancelCause(ctx)
+	defer stop(nil)
+	defer w.register(job.ID, stop)()
+	jobCtx, cancel := context.WithTimeout(stopCtx, w.cfg.Timeout)
 	defer cancel()
 
 	steps := newStepTracker(job.Steps)
@@ -163,10 +203,14 @@ func (w *Worker) run(ctx context.Context, job Job) {
 			if err != nil {
 				return err
 			}
-			if ok {
-				w.events.Publish(job.ID, StreamEvent{Name: EventProgress,
-					Data: api.AnalysisProgressEvent{Step: p.Step, State: p.State, Progress: p.Percent}})
+			if !ok {
+				// Cancelled or deleted, possibly by another API instance whose
+				// Cancel cannot reach this registry: stop spending on the LLM.
+				stop(errStopped)
+				return errStopped
 			}
+			w.events.Publish(job.ID, StreamEvent{Name: EventProgress,
+				Data: api.AnalysisProgressEvent{Step: p.Step, State: p.State, Progress: p.Percent}})
 		case ev.Completed != nil:
 			terminal = true
 			tctx, cancel := terminalCtx()
@@ -195,8 +239,13 @@ func (w *Worker) run(ctx context.Context, job Job) {
 	req := Request{JobID: job.ID, Lead: job.Input, Models: job.ModelConfig}
 	var err error
 	for attempt := 1; ; attempt++ {
-		if aerr := w.store.AddDispatchAttempt(jobCtx, job.ID); aerr != nil {
+		running, aerr := w.store.AddDispatchAttempt(jobCtx, job.ID)
+		if aerr != nil {
 			log.Warn("count dispatch attempt", "err", aerr)
+		} else if !running {
+			stop(errStopped)
+			err = errStopped
+			break
 		}
 		err = w.ai.Analyze(jobCtx, req, handle)
 		// Retry only before the first event: afterwards LLM spend has happened.
@@ -209,6 +258,10 @@ func (w *Worker) run(ctx context.Context, job Job) {
 		}
 	}
 	if terminal {
+		return
+	}
+	if errors.Is(context.Cause(stopCtx), errStopped) {
+		log.Info("analysis stopped", "reason", "cancelled or deleted")
 		return
 	}
 
@@ -236,16 +289,18 @@ func (w *Worker) publishTerminal(job Job, ok bool) {
 }
 
 // classify maps an unfinished dispatch to a user-facing error (SPEC.md §11.1).
+// The AI service enforces the propagated deadline too and may report
+// DEADLINE_EXCEEDED moments before jobCtx expires, so both count as timeout.
 func classify(parent, jobCtx context.Context, err error) JobError {
 	switch {
 	case parent.Err() != nil:
-		return JobError{Code: CodeInterrupted, Message: "Analysis was interrupted. Retry.", Retryable: true}
-	case errors.Is(jobCtx.Err(), context.DeadlineExceeded):
-		return JobError{Code: CodeTimeout, Message: "Analysis took too long. Retry.", Retryable: true}
+		return JobError{Code: CodeInterrupted, Message: msgInterrupted, Retryable: true}
+	case errors.Is(jobCtx.Err(), context.DeadlineExceeded), errors.Is(err, context.DeadlineExceeded):
+		return JobError{Code: CodeTimeout, Message: msgTimeout, Retryable: true}
 	case errors.Is(err, ErrAIUnavailable):
-		return JobError{Code: CodeAIUnavailable, Message: "Analysis service unavailable. Retry.", Retryable: true}
+		return JobError{Code: CodeAIUnavailable, Message: msgAIUnavailable, Retryable: true}
 	default: // stream ended without a terminal event, protocol error, or store error
-		return JobError{Code: CodeInternal, Message: "Analysis failed unexpectedly. Retry.", Retryable: true}
+		return JobError{Code: CodeInternal, Message: msgInternal, Retryable: true}
 	}
 }
 

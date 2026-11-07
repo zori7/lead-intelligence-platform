@@ -38,6 +38,7 @@ type memStore struct {
 	mu       sync.Mutex
 	jobs     map[uuid.UUID]*Job
 	attempts int
+	onClaim  func(*Job) // runs after a claim, with the lock held
 }
 
 func newMemStore(jobs ...Job) *memStore {
@@ -55,17 +56,36 @@ func (s *memStore) ClaimNext(_ context.Context, models llmsettings.Resolved) (Jo
 	for _, j := range s.jobs {
 		if j.Status == api.JobQueued {
 			j.Status, j.ModelConfig = api.JobRunning, models
-			return *j, true, nil
+			claimed := *j
+			if s.onClaim != nil {
+				s.onClaim(j)
+			}
+			return claimed, true, nil
 		}
 	}
 	return Job{}, false, nil
 }
 
-func (s *memStore) AddDispatchAttempt(context.Context, uuid.UUID) error {
+func (s *memStore) AddDispatchAttempt(_ context.Context, id uuid.UUID) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.jobs[id].Status != api.JobRunning {
+		return false, nil
+	}
 	s.attempts++
-	return nil
+	return true, nil
+}
+
+// cancel is the user's cancel as the SQL store applies it.
+func (s *memStore) cancel(id uuid.UUID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j := s.jobs[id]
+	if j.Status != api.JobRunning && j.Status != api.JobQueued {
+		return false
+	}
+	j.Status = api.JobCancelled
+	return true
 }
 
 func (s *memStore) UpdateProgress(_ context.Context, id uuid.UUID, steps []Step, p int) (bool, error) {
@@ -250,6 +270,16 @@ func TestWorker(t *testing.T) {
 			timeout:    50 * time.Millisecond,
 			wantStatus: api.JobFailed, wantCode: CodeTimeout, wantCalls: 1, wantRetry: true,
 		},
+		{
+			// The AI service enforces the propagated deadline and may report it
+			// a moment before Go's own context expires.
+			name: "deadline reported by the ai service first",
+			scripts: []func(context.Context, func(Event) error) error{func(_ context.Context, h func(Event) error) error {
+				_ = h(progress(api.StepExtractCompany, api.StepRunning, 25))
+				return context.DeadlineExceeded
+			}},
+			wantStatus: api.JobFailed, wantCode: CodeTimeout, wantCalls: 1, wantRetry: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -317,6 +347,169 @@ func TestWorkerShutdownMarksInterrupted(t *testing.T) {
 	}
 }
 
+// blockingAnalyzer reports one step, then blocks until its context ends.
+type blockingAnalyzer struct {
+	started chan struct{}
+	cause   chan error // the context's cancellation cause
+	calls   int
+}
+
+func newBlockingAnalyzer() *blockingAnalyzer {
+	return &blockingAnalyzer{started: make(chan struct{}), cause: make(chan error, 1)}
+}
+
+func (a *blockingAnalyzer) Analyze(ctx context.Context, _ Request, h func(Event) error) error {
+	a.calls++
+	if err := h(progress(api.StepValidateInput, api.StepRunning, 0)); err != nil {
+		a.cause <- context.Cause(ctx)
+		return err
+	}
+	close(a.started)
+	<-ctx.Done()
+	a.cause <- context.Cause(ctx)
+	return ctx.Err()
+}
+
+func TestWorkerCancel(t *testing.T) {
+	job := queuedJob()
+	store := newMemStore(job)
+	ai := newBlockingAnalyzer()
+	events := &recordingPublisher{}
+	w := NewWorker(store, fakeSettings{configured()}, ai, events, WorkerConfig{Timeout: time.Minute})
+
+	done := make(chan struct{})
+	go func() { w.processNext(context.Background()); close(done) }()
+	<-ai.started
+
+	// What the cancel handler does: the database transition, then the abort.
+	if !store.cancel(job.ID) {
+		t.Fatal("cancel lost against a running job")
+	}
+	w.Cancel(job.ID)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not stop within 1s of cancel")
+	}
+	if cause := <-ai.cause; !errors.Is(cause, errStopped) {
+		t.Fatalf("analyzer context cause %v, want errStopped", cause)
+	}
+	if got := store.get(job.ID); got.Status != api.JobCancelled || got.Error != nil {
+		t.Fatalf("job %s %+v, want cancelled without error", got.Status, got.Error)
+	}
+	events.mu.Lock()
+	defer events.mu.Unlock()
+	if len(events.events) != 1 || events.events[0].Name != EventProgress {
+		t.Fatalf("worker published %v; the cancel handler owns the cancelled event", events.events)
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.running) != 0 {
+		t.Fatalf("cancel registry not cleaned up: %v", w.running)
+	}
+}
+
+func TestWorkerStopsWhenJobNoLongerRunning(t *testing.T) {
+	t.Run("cancelled between claim and dispatch", func(t *testing.T) {
+		job := queuedJob()
+		store := newMemStore(job)
+		store.onClaim = func(j *Job) { j.Status = api.JobCancelled }
+		ai := newBlockingAnalyzer()
+		runOne(t, store, ai, WorkerConfig{})
+		if ai.calls != 0 {
+			t.Fatal("dispatched a job that was cancelled before dispatch")
+		}
+		if got := store.get(job.ID); got.Status != api.JobCancelled {
+			t.Fatalf("status %s, want cancelled", got.Status)
+		}
+	})
+	t.Run("cancelled where the registry cannot see it", func(t *testing.T) {
+		// E.g. cancelled through another API instance: the next progress write
+		// finds the job no longer running and the worker aborts the run.
+		job := queuedJob()
+		store := newMemStore(job)
+		ai := &scriptAnalyzer{scripts: []func(context.Context, func(Event) error) error{
+			func(ctx context.Context, h func(Event) error) error {
+				store.cancel(job.ID)
+				if err := h(progress(api.StepValidateInput, api.StepRunning, 0)); err != nil {
+					if !errors.Is(context.Cause(ctx), errStopped) {
+						t.Errorf("run context not cancelled: %v", context.Cause(ctx))
+					}
+					return err
+				}
+				t.Error("progress accepted for a cancelled job")
+				return nil
+			},
+		}}
+		runOne(t, store, ai, WorkerConfig{})
+		if got := store.get(job.ID); got.Status != api.JobCancelled || got.Error != nil {
+			t.Fatalf("job %s %+v, want cancelled", got.Status, got.Error)
+		}
+	})
+}
+
+func TestCancelHandler(t *testing.T) {
+	l := sampleLead()
+	running := queuedJob()
+	running.Status = api.JobRunning
+	tests := []struct {
+		name       string
+		job        Job
+		id         uuid.UUID
+		wantStatus int
+	}{
+		{"running", running, running.ID, http.StatusOK},
+		{"queued", queuedJob(), uuid.Nil, http.StatusOK},
+		{"already finished", succeededJob(l.ID), uuid.Nil, http.StatusConflict},
+		{"unknown", queuedJob(), uuid.New(), http.StatusNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			id := tt.id
+			if id == uuid.Nil {
+				id = tt.job.ID
+			}
+			runner, broker := &fakeRunner{}, NewBroker()
+			events, unsubscribe := broker.Subscribe(id)
+			defer unsubscribe()
+			h := NewHandler(&fakeJobs{job: tt.job}, fakeLeads{l}, fakeSettings{configured()}, runner, broker)
+			rec := httptest.NewRecorder()
+			newRouter(h).ServeHTTP(rec, httptest.NewRequest("POST", "/api/analyses/"+id.String()+"/cancel", nil))
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status %d, want %d: %s", rec.Code, tt.wantStatus, rec.Body)
+			}
+			apitest.CheckResponse(t, "POST", "/analyses/{id}/cancel", rec)
+			if tt.wantStatus != http.StatusOK {
+				if len(runner.cancelled) != 0 {
+					t.Fatal("aborted a run that was not cancelled")
+				}
+				return
+			}
+			if len(runner.cancelled) != 1 || runner.cancelled[0] != id {
+				t.Fatalf("runner cancels %v, want [%s]", runner.cancelled, id)
+			}
+			if ev, _ := recv(t, events); ev.Name != EventCancelled {
+				t.Fatalf("published %q, want cancelled", ev.Name)
+			}
+		})
+	}
+}
+
+func TestCancelActiveForLead(t *testing.T) {
+	job := queuedJob()
+	runner := &fakeRunner{}
+	h := NewHandler(&fakeJobs{job: job}, fakeLeads{}, fakeSettings{}, runner, NewBroker())
+
+	if err := h.CancelActive(context.Background(), uuid.New()); err != nil || len(runner.cancelled) != 0 {
+		t.Fatalf("lead without active job: err %v, cancels %v", err, runner.cancelled)
+	}
+	if err := h.CancelActive(context.Background(), job.LeadID); err != nil || len(runner.cancelled) != 1 {
+		t.Fatalf("lead with active job: err %v, cancels %v", err, runner.cancelled)
+	}
+}
+
 // ---- Handlers and contract ----------------------------------------------------------
 
 type fakeLeads struct{ l lead.Lead }
@@ -351,9 +544,35 @@ func (f *fakeJobs) ListByLead(context.Context, uuid.UUID, int) ([]Job, error) {
 	return []Job{f.job}, nil
 }
 
-type countWaker struct{ n int }
+func (f *fakeJobs) Cancel(_ context.Context, id uuid.UUID) (Job, error) {
+	if id != f.job.ID {
+		return Job{}, ErrNotFound
+	}
+	if !isActive(f.job.Status) {
+		return Job{}, ErrNotCancellable
+	}
+	f.job.Status = api.JobCancelled
+	return f.job, nil
+}
 
-func (c *countWaker) Wake() { c.n++ }
+func (f *fakeJobs) CancelActive(_ context.Context, leadID uuid.UUID) (Job, bool, error) {
+	if f.job.LeadID != leadID || !isActive(f.job.Status) {
+		return Job{}, false, nil
+	}
+	f.job.Status = api.JobCancelled
+	return f.job, true, nil
+}
+
+func isActive(s Status) bool { return s == api.JobQueued || s == api.JobRunning }
+
+// fakeRunner records wakes and cancels.
+type fakeRunner struct {
+	n         int
+	cancelled []uuid.UUID
+}
+
+func (c *fakeRunner) Wake()                  { c.n++ }
+func (c *fakeRunner) Cancel(jobID uuid.UUID) { c.cancelled = append(c.cancelled, jobID) }
 
 func newRouter(h *Handler) http.Handler {
 	r := chi.NewRouter()
@@ -400,7 +619,7 @@ func TestTrigger(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			jobs := &fakeJobs{job: queuedJob(), created: tt.created}
-			waker := &countWaker{}
+			waker := &fakeRunner{}
 			h := NewHandler(jobs, fakeLeads{l}, fakeSettings{tt.settings}, waker, NewBroker())
 			rec := httptest.NewRecorder()
 			newRouter(h).ServeHTTP(rec, httptest.NewRequest("POST", "/api/leads/"+tt.leadID.String()+"/analyses", nil))
@@ -437,7 +656,7 @@ func TestResponsesMatchSpec(t *testing.T) {
 
 	for name, job := range map[string]Job{"queued": queuedJob(), "succeeded": succeededJob(l.ID), "failed": failed} {
 		t.Run(name, func(t *testing.T) {
-			h := NewHandler(&fakeJobs{job: job}, fakeLeads{l}, fakeSettings{configured()}, &countWaker{}, NewBroker())
+			h := NewHandler(&fakeJobs{job: job}, fakeLeads{l}, fakeSettings{configured()}, &fakeRunner{}, NewBroker())
 			for _, tc := range []struct{ method, url, specPath string }{
 				{"GET", "/api/analyses/" + job.ID.String(), "/analyses/{id}"},
 				{"GET", "/api/analyses/" + uuid.NewString(), "/analyses/{id}"},
@@ -456,7 +675,7 @@ func TestResponsesMatchSpec(t *testing.T) {
 func TestLeadDetailWithLatestAnalysisMatchesSpec(t *testing.T) {
 	l := sampleLead()
 	job := succeededJob(l.ID)
-	h := lead.NewHandler(singleLead{l}, func(context.Context, uuid.UUID) (any, error) { return &job, nil })
+	h := lead.NewHandler(singleLead{l}, func(context.Context, uuid.UUID) (any, error) { return &job, nil }, nil)
 	r := chi.NewRouter()
 	r.Route("/api", func(r chi.Router) {
 		api.HandlerWithOptions(h, api.ChiServerOptions{BaseRouter: r, ErrorHandlerFunc: httpx.ParamError})

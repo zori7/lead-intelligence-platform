@@ -172,7 +172,7 @@ func TestEventsForFinishedJob(t *testing.T) {
 		{failed, EventFailed},
 	} {
 		t.Run(tc.want, func(t *testing.T) {
-			h := NewHandler(&fakeJobs{job: tc.job}, fakeLeads{l}, fakeSettings{configured()}, &countWaker{}, NewBroker())
+			h := NewHandler(&fakeJobs{job: tc.job}, fakeLeads{l}, fakeSettings{configured()}, &fakeRunner{}, NewBroker())
 			rec := httptest.NewRecorder()
 			// The handler must return on its own: a terminal job closes the stream.
 			newRouter(h).ServeHTTP(rec, httptest.NewRequest("GET", "/api/analyses/"+tc.job.ID.String()+"/events", nil))
@@ -197,7 +197,7 @@ func TestEventsForFinishedJob(t *testing.T) {
 }
 
 func TestEventsUnknownJob(t *testing.T) {
-	h := NewHandler(&fakeJobs{job: queuedJob()}, fakeLeads{sampleLead()}, fakeSettings{configured()}, &countWaker{}, NewBroker())
+	h := NewHandler(&fakeJobs{job: queuedJob()}, fakeLeads{sampleLead()}, fakeSettings{configured()}, &fakeRunner{}, NewBroker())
 	rec := httptest.NewRecorder()
 	newRouter(h).ServeHTTP(rec, httptest.NewRequest("GET", "/api/analyses/"+uuid.NewString()+"/events", nil))
 	if rec.Code != http.StatusNotFound {
@@ -210,7 +210,7 @@ func TestEventsLiveStream(t *testing.T) {
 	job := queuedJob()
 	job.Status = api.JobRunning
 	broker := NewBroker()
-	h := NewHandler(&fakeJobs{job: job}, fakeLeads{sampleLead()}, fakeSettings{configured()}, &countWaker{}, broker)
+	h := NewHandler(&fakeJobs{job: job}, fakeLeads{sampleLead()}, fakeSettings{configured()}, &fakeRunner{}, broker)
 	h.ping = 10 * time.Millisecond
 	srv := httptest.NewServer(newRouter(h))
 	defer srv.Close()
@@ -251,7 +251,7 @@ func TestEventsLiveStream(t *testing.T) {
 func TestEventsEndOnClientDisconnect(t *testing.T) {
 	job := queuedJob()
 	broker := NewBroker()
-	h := NewHandler(&fakeJobs{job: job}, fakeLeads{sampleLead()}, fakeSettings{configured()}, &countWaker{}, broker)
+	h := NewHandler(&fakeJobs{job: job}, fakeLeads{sampleLead()}, fakeSettings{configured()}, &fakeRunner{}, broker)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	finished := make(chan struct{})

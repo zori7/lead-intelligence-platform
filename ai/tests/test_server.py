@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import grpc
@@ -37,16 +37,20 @@ async def fake_llm() -> FakeLlm:
 
 
 @pytest.fixture
-async def stub(fake_llm: FakeLlm) -> AsyncIterator[Any]:
+async def servicer(fake_llm: FakeLlm) -> AnalysisServicer:
     web = FakeWeb()
-    server = grpc.aio.server()
-    servicer = AnalysisServicer(
+    return AnalysisServicer(
         extra_configurable={
             "llm_factory": fake_llm,
             "http_client": web.client(),
             "resolver": web.resolve,
         }
     )
+
+
+@pytest.fixture
+async def stub(servicer: AnalysisServicer) -> AsyncIterator[Any]:
+    server = grpc.aio.server()
     pb_grpc.add_AnalysisServiceServicer_to_server(servicer, server)
     port = server.add_insecure_port("127.0.0.1:0")
     await server.start()
@@ -127,6 +131,64 @@ async def test_duplicate_job_is_rejected(stub: Any, fake_llm: FakeLlm) -> None:
     # The job ID is released afterwards.
     again = await collect(stub, request("job-dup"))
     assert again[-1].WhichOneof("payload") == "completed"
+
+
+async def eventually(condition: Callable[[], bool], what: str) -> None:
+    """Poll ``condition`` for up to 2s; the servicer exposes no event to await."""
+    for _ in range(200):
+        if condition():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"timed out waiting for {what}")
+
+
+async def wait_until_idle(servicer: AnalysisServicer) -> None:
+    """Wait for the handler to finish: its ``finally`` releases the job ID."""
+    await eventually(lambda: not servicer._in_flight, "the in-flight set to empty")
+
+
+async def start_blocked(stub: Any, fake_llm: FakeLlm, job_id: str, rpc_timeout: float = 10) -> Any:
+    """Start a run and return once it is blocked inside its first LLM call."""
+    fake_llm.gate = asyncio.Event()
+    call = stub.AnalyzeLead(request(job_id), timeout=rpc_timeout)
+    async for e in call:
+        if e.progress.step == pb.STEP_EXTRACT_COMPANY:
+            break
+    await eventually(lambda: bool(fake_llm.calls), "the first LLM call")
+    return call
+
+
+async def test_client_cancel_aborts_the_run(
+    stub: Any, servicer: AnalysisServicer, fake_llm: FakeLlm
+) -> None:
+    call = await start_blocked(stub, fake_llm, "job-cancel")
+    calls_before = len(fake_llm.calls)
+
+    call.cancel()
+    await wait_until_idle(servicer)
+
+    # Opening the gate would let a still-running graph continue: it must not.
+    fake_llm.gate.set()
+    await asyncio.sleep(0.1)
+    assert len(fake_llm.calls) == calls_before
+    assert await call.code() == grpc.StatusCode.CANCELLED
+
+
+async def test_deadline_aborts_the_run(
+    stub: Any, servicer: AnalysisServicer, fake_llm: FakeLlm
+) -> None:
+    call = await start_blocked(stub, fake_llm, "job-deadline", rpc_timeout=0.5)
+    calls_before = len(fake_llm.calls)
+
+    with pytest.raises(grpc.aio.AioRpcError) as err:
+        async for _ in call:
+            pass
+    assert err.value.code() == grpc.StatusCode.DEADLINE_EXCEEDED
+    await wait_until_idle(servicer)
+
+    fake_llm.gate.set()
+    await asyncio.sleep(0.1)
+    assert len(fake_llm.calls) == calls_before
 
 
 async def test_list_models(stub: Any, monkeypatch: pytest.MonkeyPatch) -> None:

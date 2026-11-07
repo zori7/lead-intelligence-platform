@@ -610,6 +610,40 @@ export type GetAnalysisResponses = {
 
 export type GetAnalysisResponse = GetAnalysisResponses[keyof GetAnalysisResponses];
 
+export type CancelAnalysisData = {
+    body?: never;
+    path: {
+        /**
+         * A malformed ID is treated as unknown (404).
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/analyses/{id}/cancel';
+};
+
+export type CancelAnalysisErrors = {
+    /**
+     * `not_found`
+     */
+    404: Error;
+    /**
+     * `invalid_state`: the job has already finished.
+     */
+    409: Error;
+};
+
+export type CancelAnalysisError = CancelAnalysisErrors[keyof CancelAnalysisErrors];
+
+export type CancelAnalysisResponses = {
+    /**
+     * The cancelled job.
+     */
+    200: AnalysisJob;
+};
+
+export type CancelAnalysisResponse = CancelAnalysisResponses[keyof CancelAnalysisResponses];
+
 export type StreamAnalysisEventsData = {
     body?: never;
     path: {

@@ -24,22 +24,27 @@ type Repository interface {
 // lead package does not depend on it.
 type LatestAnalysisFunc func(ctx context.Context, leadID uuid.UUID) (any, error)
 
+// BeforeDeleteFunc runs before a lead is deleted; an error aborts the delete.
+// The analysis feature uses it to cancel the lead's active job.
+type BeforeDeleteFunc func(ctx context.Context, leadID uuid.UUID) error
+
 // Handler implements the lead operations of the generated api.ServerInterface.
 // Routing, path-parameter parsing and query-parameter type conversion are
 // generated from api/openapi.yaml. Operations of other features answer 501
 // through the embedded api.Unimplemented; cmd/api composes all handlers.
 type Handler struct {
 	api.Unimplemented
-	repo   Repository
-	latest LatestAnalysisFunc
+	repo         Repository
+	latest       LatestAnalysisFunc
+	beforeDelete BeforeDeleteFunc
 }
 
 var _ api.ServerInterface = (*Handler)(nil)
 
 // NewHandler builds the lead handler. latest may be nil, in which case
-// latest_analysis is always null.
-func NewHandler(repo Repository, latest LatestAnalysisFunc) *Handler {
-	return &Handler{repo: repo, latest: latest}
+// latest_analysis is always null; beforeDelete may be nil.
+func NewHandler(repo Repository, latest LatestAnalysisFunc, beforeDelete BeforeDeleteFunc) *Handler {
+	return &Handler{repo: repo, latest: latest, beforeDelete: beforeDelete}
 }
 
 type listResponse struct {
@@ -126,6 +131,12 @@ func (h *Handler) UpdateLead(w http.ResponseWriter, r *http.Request, id uuid.UUI
 }
 
 func (h *Handler) DeleteLead(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+	if h.beforeDelete != nil {
+		if err := h.beforeDelete(r.Context(), id); err != nil {
+			httpx.WriteError(w, r, err)
+			return
+		}
+	}
 	if err := h.repo.Delete(r.Context(), id); err != nil {
 		httpx.WriteError(w, r, err)
 		return

@@ -17,8 +17,13 @@ import (
 	"leadintel/backend/internal/llmsettings"
 )
 
-// ErrNotFound is returned when an analysis job does not exist.
-var ErrNotFound = fmt.Errorf("analysis %w", apperr.ErrNotFound)
+var (
+	// ErrNotFound is returned when an analysis job does not exist.
+	ErrNotFound = fmt.Errorf("analysis %w", apperr.ErrNotFound)
+	// ErrNotCancellable is returned when cancelling a job that has already finished.
+	ErrNotCancellable = &apperr.CodedError{Kind: apperr.ErrInvalidState, Code: "invalid_state",
+		Message: "The analysis has already finished."}
+)
 
 type (
 	Status    = api.JobStatus
@@ -147,4 +152,12 @@ const (
 	CodeTimeout       = "timeout"
 	CodeInterrupted   = "interrupted"
 	CodeInternal      = "internal"
+)
+
+// User-safe messages for the error codes Go writes (SPEC.md §11.1).
+const (
+	msgAIUnavailable = "Analysis service unavailable. Retry."
+	msgTimeout       = "Analysis took too long. Retry."
+	msgInterrupted   = "Analysis was interrupted. Retry."
+	msgInternal      = "Analysis failed unexpectedly. Retry."
 )

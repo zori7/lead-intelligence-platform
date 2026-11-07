@@ -214,10 +214,23 @@ class AnalysisServicer(pb_grpc.AnalysisServiceServicer):
             else:
                 log.error("graph ended without result or failure", extra={"job_id": job_id})
                 yield failed(internal())
-        except asyncio.CancelledError, TimeoutError:
-            # Client cancelled or the deadline passed: gRPC reports the status.
-            log.info("analysis aborted", extra={"job_id": job_id})
+        except asyncio.CancelledError:
+            # Go cancelled the stream (user cancel, lead deleted, shutdown).
+            # Cancellation unwinds the graph and aborts in-flight LLM and
+            # website requests; re-raising lets gRPC finish the RPC. gRPC also
+            # cancels the task when the deadline passes, often before
+            # asyncio.timeout fires, so the log names the actual reason.
+            left = context.time_remaining()
+            if left is not None and left <= 0:
+                log.info("analysis deadline exceeded", extra={"job_id": job_id})
+            else:
+                log.info("analysis cancelled by client", extra={"job_id": job_id})
             raise
+        except TimeoutError:
+            # The propagated deadline passed. Report it as such, so Go records
+            # a timeout even when this side notices first.
+            log.info("analysis deadline exceeded", extra={"job_id": job_id})
+            await context.abort(grpc.StatusCode.DEADLINE_EXCEEDED, "analysis deadline exceeded")
         except Exception:
             log.exception("analysis crashed", extra={"job_id": job_id})
             yield failed(internal())

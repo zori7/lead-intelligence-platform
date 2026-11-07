@@ -404,6 +404,15 @@ export const zGetAnalysisPath = z.object({
  */
 export const zGetAnalysisResponse = zAnalysisJob;
 
+export const zCancelAnalysisPath = z.object({
+    id: z.uuid()
+});
+
+/**
+ * The cancelled job.
+ */
+export const zCancelAnalysisResponse = zAnalysisJob;
+
 export const zStreamAnalysisEventsPath = z.object({
     id: z.uuid()
 });

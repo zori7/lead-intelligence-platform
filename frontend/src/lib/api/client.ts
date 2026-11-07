@@ -82,6 +82,8 @@ export const api = {
 		),
 	getAnalysis: (id: string) =>
 		request<AnalysisJob>('GET', `/api/analyses/${encodeURIComponent(id)}`),
+	cancelAnalysis: (id: string) =>
+		request<AnalysisJob>('POST', `/api/analyses/${encodeURIComponent(id)}/cancel`),
 	getConfig: () => request<AppConfig>('GET', '/api/config')
 };
 

@@ -1,13 +1,19 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { toast } from 'svelte-sonner';
+	import CircleStopIcon from '@lucide/svelte/icons/circle-stop';
 	import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-exclamation-point';
 	import * as Card from '#lib/components/ui/card/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Skeleton } from '#lib/components/ui/skeleton/index.js';
-	import { analysisQuery, configQuery, triggerAnalysisMutation } from '#lib/api/queries.js';
+	import {
+		analysisQuery,
+		cancelAnalysisMutation,
+		configQuery,
+		triggerAnalysisMutation
+	} from '#lib/api/queries.js';
 	import { subscribeToAnalysis } from '#lib/api/live-analysis.js';
 	import { isActiveJob, type AnalysisJob } from '#lib/api/types.js';
 	import { formatDateTime } from '#lib/components/leads/labels.js';
@@ -24,6 +30,7 @@
 	const qc = useQueryClient();
 	const config = createQuery(() => configQuery());
 	const trigger = createMutation(() => triggerAnalysisMutation(qc, leadId));
+	const cancel = createMutation(() => cancelAnalysisMutation(qc, leadId));
 
 	// A past job picked from the history; null shows the latest one.
 	let selectedId = $state<string | null>(null);
@@ -51,6 +58,12 @@
 		selectedId = null;
 		trigger.mutate(undefined, {
 			onError: (err) => toast.error(`Analysis not started: ${err.message}`)
+		});
+	}
+
+	function cancelJob(id: string) {
+		cancel.mutate(id, {
+			onError: (err) => toast.error(`Could not cancel: ${err.message}`)
 		});
 	}
 
@@ -122,6 +135,17 @@
 						<Card.Description
 							>Steps update live; you can leave this page and come back.</Card.Description
 						>
+						<Card.Action>
+							<Button
+								variant="outline"
+								size="sm"
+								disabled={cancel.isPending}
+								onclick={() => cancelJob(current.id)}
+							>
+								<CircleStopIcon />
+								{cancel.isPending ? 'Cancelling…' : 'Cancel'}
+							</Button>
+						</Card.Action>
 					</Card.Header>
 					<Card.Content>
 						<AnalysisProgress steps={current.steps} progress={current.progress} />
@@ -131,7 +155,11 @@
 				<Card.Root>
 					<Card.Content class="flex flex-col gap-4">
 						<div class="flex items-start gap-3">
-							<TriangleAlertIcon class="mt-0.5 size-5 shrink-0 text-rose-300" />
+							{#if current.status === 'cancelled'}
+								<CircleStopIcon class="mt-0.5 size-5 shrink-0 text-muted-foreground" />
+							{:else}
+								<TriangleAlertIcon class="mt-0.5 size-5 shrink-0 text-rose-300" />
+							{/if}
 							<div class="flex flex-1 flex-col gap-1">
 								<p class="font-medium">
 									{current.status === 'cancelled' ? 'Analysis cancelled' : 'Analysis failed'}
@@ -151,6 +179,10 @@
 							{#if current.error?.retryable && !viewingPast}
 								<Button variant="outline" disabled={!aiConfigured || busy} onclick={analyze}>
 									<RotateCwIcon /> Retry
+								</Button>
+							{:else if current.status === 'cancelled' && !viewingPast}
+								<Button variant="outline" disabled={!aiConfigured || busy} onclick={analyze}>
+									<SparklesIcon /> Analyze again
 								</Button>
 							{/if}
 						</div>

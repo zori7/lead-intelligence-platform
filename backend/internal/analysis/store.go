@@ -109,14 +109,16 @@ func (s *Store) ClaimNext(ctx context.Context, models llmsettings.Resolved) (job
 }
 
 // AddDispatchAttempt counts one dispatch of a running job to the AI service.
-func (s *Store) AddDispatchAttempt(ctx context.Context, id uuid.UUID) error {
-	_, err := s.db.Exec(ctx, `UPDATE analysis_jobs
+// It returns false when the job is no longer running (cancelled or deleted
+// between the claim and the dispatch), in which case it must not be sent.
+func (s *Store) AddDispatchAttempt(ctx context.Context, id uuid.UUID) (bool, error) {
+	tag, err := s.db.Exec(ctx, `UPDATE analysis_jobs
 		SET dispatch_attempts = dispatch_attempts + 1, updated_at = now()
 		WHERE id = $1 AND status = 'running'`, id)
 	if err != nil {
-		return fmt.Errorf("count dispatch attempt: %w", err)
+		return false, fmt.Errorf("count dispatch attempt: %w", err)
 	}
-	return nil
+	return tag.RowsAffected() == 1, nil
 }
 
 // UpdateProgress stores the step list of a running job. It returns false when
@@ -183,6 +185,74 @@ func (s *Store) Fail(ctx context.Context, id uuid.UUID, steps []Step, e JobError
 		return Job{}, false, fmt.Errorf("fail analysis: %w", err)
 	}
 	return job, true, nil
+}
+
+// settleSteps is a SQL expression that rewrites the `steps` column of a job
+// that stops early, like stepTracker.finish: pending steps become skipped,
+// a running step becomes `running`, finished steps keep their state. It is
+// used by writers that do not hold the step list in memory (cancel, startup
+// recovery). `running` is a StepState constant, never user input.
+func settleSteps(running StepState) string {
+	return `(SELECT coalesce(jsonb_agg(CASE s->>'state'
+			WHEN 'pending' THEN jsonb_set(s, '{state}', '"skipped"')
+			WHEN 'running' THEN jsonb_set(s, '{state}', '"` + string(running) + `"')
+			ELSE s END ORDER BY i), '[]')
+		FROM jsonb_array_elements(steps) WITH ORDINALITY AS t(s, i))`
+}
+
+// Cancel moves a queued or running job to cancelled. A job that has already
+// finished keeps its state and ErrNotCancellable is returned.
+func (s *Store) Cancel(ctx context.Context, id uuid.UUID) (Job, error) {
+	job, err := scanJob(s.db.QueryRow(ctx, `UPDATE analysis_jobs
+		SET status = 'cancelled', steps = `+settleSteps(api.StepSkipped)+`,
+		    finished_at = now(), updated_at = now()
+		WHERE id = $1 AND status IN ('queued', 'running')
+		RETURNING `+jobColumns, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		if _, err := s.Get(ctx, id); err != nil {
+			return Job{}, err
+		}
+		return Job{}, ErrNotCancellable
+	}
+	if err != nil {
+		return Job{}, fmt.Errorf("cancel analysis: %w", err)
+	}
+	return job, nil
+}
+
+// CancelActive cancels the lead's queued or running job. ok is false when the
+// lead has no active job.
+func (s *Store) CancelActive(ctx context.Context, leadID uuid.UUID) (job Job, ok bool, err error) {
+	job, err = scanJob(s.db.QueryRow(ctx, `UPDATE analysis_jobs
+		SET status = 'cancelled', steps = `+settleSteps(api.StepSkipped)+`,
+		    finished_at = now(), updated_at = now()
+		WHERE lead_id = $1 AND status IN ('queued', 'running')
+		RETURNING `+jobColumns, leadID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Job{}, false, nil
+	}
+	if err != nil {
+		return Job{}, false, fmt.Errorf("cancel active analysis: %w", err)
+	}
+	return job, true, nil
+}
+
+// FailInterrupted fails every running job as interrupted. It runs at startup,
+// before the workers start: a job still running then lost its stream when the
+// previous process exited (SPEC.md §11.2). Queued jobs are left for the workers.
+//
+// This assumes one API instance owns all running jobs. Running several
+// instances against one database would need per-instance ownership or leases.
+func (s *Store) FailInterrupted(ctx context.Context) (int64, error) {
+	tag, err := s.db.Exec(ctx, `UPDATE analysis_jobs
+		SET status = 'failed', steps = `+settleSteps(api.StepFailed)+`,
+		    error_code = $1, error_message = $2, retryable = true,
+		    finished_at = now(), updated_at = now()
+		WHERE status = 'running'`, CodeInterrupted, msgInterrupted)
+	if err != nil {
+		return 0, fmt.Errorf("fail interrupted analyses: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 func (s *Store) Get(ctx context.Context, id uuid.UUID) (Job, error) {

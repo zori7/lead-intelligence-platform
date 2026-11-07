@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
@@ -24,10 +25,17 @@ import (
 	"leadintel/backend/internal/llmsettings"
 )
 
+// serviceName is the name the AI service reports health under (proto/…/analysis.proto).
+const serviceName = "leadintel.analysis.v1.AnalysisService"
+
+// ErrNotServing means the AI service answered the health check but is not serving.
+var ErrNotServing = errors.New("ai service not serving")
+
 // Client talks to the AI service over one multiplexed connection.
 type Client struct {
-	conn *grpc.ClientConn
-	svc  analysisv1.AnalysisServiceClient
+	conn   *grpc.ClientConn
+	svc    analysisv1.AnalysisServiceClient
+	health healthpb.HealthClient
 }
 
 // New creates a client for addr. The connection is established lazily, so the
@@ -38,7 +46,20 @@ func New(addr string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create ai client: %w", err)
 	}
-	return &Client{conn: conn, svc: analysisv1.NewAnalysisServiceClient(conn)}, nil
+	return &Client{conn: conn, svc: analysisv1.NewAnalysisServiceClient(conn), health: healthpb.NewHealthClient(conn)}, nil
+}
+
+// Health runs the standard gRPC health check for the analysis service. The
+// caller bounds it with a deadline.
+func (c *Client) Health(ctx context.Context) error {
+	resp, err := c.health.Check(ctx, &healthpb.HealthCheckRequest{Service: serviceName})
+	if err != nil {
+		return fmt.Errorf("ai health check: %w", err)
+	}
+	if resp.GetStatus() != healthpb.HealthCheckResponse_SERVING {
+		return fmt.Errorf("%w: %s", ErrNotServing, resp.GetStatus())
+	}
+	return nil
 }
 
 func (c *Client) Close() error { return c.conn.Close() }

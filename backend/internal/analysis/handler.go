@@ -22,6 +22,8 @@ type Repository interface {
 	Create(ctx context.Context, leadID uuid.UUID, input LeadInput) (Job, bool, error)
 	Get(ctx context.Context, id uuid.UUID) (Job, error)
 	ListByLead(ctx context.Context, leadID uuid.UUID, limit int) ([]Job, error)
+	Cancel(ctx context.Context, id uuid.UUID) (Job, error)
+	CancelActive(ctx context.Context, leadID uuid.UUID) (Job, bool, error)
 }
 
 // LeadGetter loads a lead (implemented by lead.Store).
@@ -29,12 +31,17 @@ type LeadGetter interface {
 	Get(ctx context.Context, id uuid.UUID) (lead.Lead, error)
 }
 
-// Waker is notified when a job is queued (implemented by *Worker).
-type Waker interface{ Wake() }
+// Runner runs queued jobs (implemented by *Worker): Wake signals a new job,
+// Cancel aborts a job's AI run after its state has been changed in the database.
+type Runner interface {
+	Wake()
+	Cancel(jobID uuid.UUID)
+}
 
-// Subscriber provides live job events (implemented by *Broker).
-type Subscriber interface {
+// Events provides live job events (implemented by *Broker).
+type Events interface {
 	Subscribe(jobID uuid.UUID) (<-chan StreamEvent, func())
+	Publisher
 }
 
 // pingInterval keeps idle event streams alive through proxies (SPEC.md §7.4).
@@ -46,15 +53,15 @@ type Handler struct {
 	jobs     Repository
 	leads    LeadGetter
 	settings SettingsSource
-	waker    Waker
-	events   Subscriber
+	runner   Runner
+	events   Events
 	ping     time.Duration
 }
 
 var _ api.ServerInterface = (*Handler)(nil)
 
-func NewHandler(jobs Repository, leads LeadGetter, settings SettingsSource, waker Waker, events Subscriber) *Handler {
-	return &Handler{jobs: jobs, leads: leads, settings: settings, waker: waker, events: events, ping: pingInterval}
+func NewHandler(jobs Repository, leads LeadGetter, settings SettingsSource, runner Runner, events Events) *Handler {
+	return &Handler{jobs: jobs, leads: leads, settings: settings, runner: runner, events: events, ping: pingInterval}
 }
 
 type listResponse struct {
@@ -86,7 +93,7 @@ func (h *Handler) TriggerAnalysis(w http.ResponseWriter, r *http.Request, id uui
 		return
 	}
 	slog.InfoContext(r.Context(), "analysis queued", "job_id", job.ID, "lead_id", id)
-	h.waker.Wake()
+	h.runner.Wake()
 	httpx.WriteJSON(w, http.StatusAccepted, job)
 }
 
@@ -115,6 +122,38 @@ func (h *Handler) GetAnalysis(w http.ResponseWriter, r *http.Request, id uuid.UU
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, job)
+}
+
+// CancelAnalysis cancels a queued or running job. The database transition
+// decides the race with the worker finishing the job: whichever conditional
+// UPDATE commits first wins, and the loser changes nothing.
+func (h *Handler) CancelAnalysis(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+	job, err := h.jobs.Cancel(r.Context(), id)
+	if err != nil {
+		httpx.WriteError(w, r, err)
+		return
+	}
+	h.stopped(r.Context(), job)
+	httpx.WriteJSON(w, http.StatusOK, job)
+}
+
+// CancelActive cancels the lead's active job, if any. The lead handler calls
+// it before deleting a lead, so the AI run stops instead of finishing for a
+// lead that no longer exists.
+func (h *Handler) CancelActive(ctx context.Context, leadID uuid.UUID) error {
+	job, ok, err := h.jobs.CancelActive(ctx, leadID)
+	if err != nil || !ok {
+		return err
+	}
+	h.stopped(ctx, job)
+	return nil
+}
+
+// stopped aborts the run of a job that was just cancelled and tells its subscribers.
+func (h *Handler) stopped(ctx context.Context, job Job) {
+	h.runner.Cancel(job.ID)
+	h.events.Publish(job.ID, StreamEvent{Name: EventCancelled, Data: job})
+	slog.InfoContext(ctx, "analysis cancelled", "job_id", job.ID, "lead_id", job.LeadID)
 }
 
 // StreamAnalysisEvents streams a job's progress as Server-Sent Events

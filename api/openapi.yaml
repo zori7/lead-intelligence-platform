@@ -107,6 +107,7 @@ paths:
     delete:
       operationId: deleteLead
       summary: Delete a lead
+      description: Cancels the lead's active analysis, if any, then deletes the lead and its analyses.
       tags: [leads]
       responses:
         '204': { description: Deleted. }
@@ -178,6 +179,34 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/AnalysisJob' }
         '404': { $ref: '#/components/responses/NotFound' }
+
+  /analyses/{id}/cancel:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: A malformed ID is treated as unknown (404).
+        schema: { type: string, format: uuid }
+    post:
+      operationId: cancelAnalysis
+      summary: Cancel a queued or running analysis
+      description: |
+        Moves the job to `cancelled` and aborts the AI run. Subscribers of the event stream
+        receive a `cancelled` event. If the job finishes before the cancel is recorded, the
+        job keeps its final state and `409 invalid_state` is returned.
+      tags: [analyses]
+      responses:
+        '200':
+          description: The cancelled job.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalysisJob' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: '`invalid_state`: the job has already finished.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   /analyses/{id}/events:
     parameters:

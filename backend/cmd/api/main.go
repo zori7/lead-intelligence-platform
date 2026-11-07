@@ -77,6 +77,17 @@ func run() error {
 	leads := lead.NewStore(pool)
 	jobs := analysis.NewStore(pool)
 	settings := llmsettings.NewStore(pool)
+
+	// Jobs left running by the previous process lost their streams with it.
+	// This must happen before the workers start claiming (SPEC.md §11.2).
+	n, err := jobs.FailInterrupted(ctx)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		slog.Warn("marked interrupted analyses as failed", "count", n)
+	}
+
 	broker := analysis.NewBroker()
 	worker := analysis.NewWorker(jobs, settings, ai, broker, analysis.WorkerConfig{
 		Workers:          cfg.AnalysisWorkers,
@@ -96,15 +107,20 @@ func run() error {
 	}()
 
 	latest := func(ctx context.Context, id uuid.UUID) (any, error) { return jobs.Latest(ctx, id) }
+	analyses := analysis.NewHandler(jobs, leads, settings, worker, broker)
 	handlers := server{
-		Handler:         lead.NewHandler(leads, latest),
-		analysisHandler: analysis.NewHandler(jobs, leads, settings, worker, broker),
+		Handler:         lead.NewHandler(leads, latest, analyses.CancelActive),
+		analysisHandler: analyses,
 		settingsHandler: llmsettings.NewHandler(settings, ai),
 	}
 
+	ready := readiness(map[string]func(context.Context) error{
+		"db": pool.Ping,
+		"ai": ai.Health,
+	})
 	srv := &http.Server{
 		Addr:              cfg.APIAddr,
-		Handler:           newRouter(pool, handlers, cfg.AdminToken),
+		Handler:           newRouter(ready, handlers, cfg.AdminToken),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		IdleTimeout:       60 * time.Second,
@@ -125,14 +141,61 @@ func run() error {
 			return fmt.Errorf("http server: %w", err)
 		}
 	case <-ctx.Done():
+		// SPEC.md §11.2: stop accepting requests and claiming jobs, cancel
+		// in-flight jobs (the worker marks them interrupted), drain up to 10s.
 		slog.Info("shutting down")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 		defer cancel()
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			return fmt.Errorf("http shutdown: %w", err)
+		stopWorkers()
+		httpErr := srv.Shutdown(shutdownCtx)
+		select {
+		case <-workersDone:
+		case <-shutdownCtx.Done():
+			slog.Warn("analysis workers did not stop within the grace period")
+		}
+		if httpErr != nil {
+			return fmt.Errorf("http shutdown: %w", httpErr)
 		}
 	}
 	return nil
+}
+
+const (
+	shutdownGrace = 10 * time.Second
+	// readyCheckTimeout bounds each dependency check of /readyz.
+	readyCheckTimeout = time.Second
+)
+
+// readiness reports each dependency as "up" or "down", checked in parallel
+// with a timeout each. Any dependency down makes the service unready (503).
+func readiness(checks map[string]func(context.Context) error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		type result struct {
+			name string
+			err  error
+		}
+		results := make(chan result, len(checks))
+		for name, check := range checks {
+			go func() {
+				ctx, cancel := context.WithTimeout(r.Context(), readyCheckTimeout)
+				defer cancel()
+				results <- result{name, check(ctx)}
+			}()
+		}
+		body := map[string]string{"status": "ok"}
+		status := http.StatusOK
+		for range checks {
+			res := <-results
+			body[res.name] = "up"
+			if res.err != nil {
+				body[res.name] = "down"
+				body["status"] = "unavailable"
+				status = http.StatusServiceUnavailable
+				slog.WarnContext(r.Context(), "readiness check failed", "dependency", res.name, "err", res.err)
+			}
+		}
+		httpx.WriteJSON(w, status, body)
+	}
 }
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
@@ -169,7 +232,7 @@ type server struct {
 
 var _ api.ServerInterface = server{}
 
-func newRouter(pool *pgxpool.Pool, handlers api.ServerInterface, adminToken string) http.Handler {
+func newRouter(ready http.HandlerFunc, handlers api.ServerInterface, adminToken string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, httpx.RequestLogger, middleware.Recoverer)
 
@@ -181,15 +244,7 @@ func newRouter(pool *pgxpool.Pool, handlers api.ServerInterface, adminToken stri
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	r.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		defer cancel()
-		if err := pool.Ping(ctx); err != nil {
-			httpx.WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable", "db": "down"})
-			return
-		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok", "db": "up"})
-	})
+	r.Get("/readyz", ready)
 
 	r.Route("/api", func(r chi.Router) {
 		r.Group(func(r chi.Router) {

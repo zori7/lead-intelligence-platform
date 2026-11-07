@@ -89,6 +89,21 @@ export const triggerAnalysisMutation = (qc: QueryClient, leadId: string) => ({
 	}
 });
 
+/**
+ * Cancels a queued or running job. The event stream also delivers the
+ * `cancelled` event; writing the response here updates the UI even when the
+ * stream is not connected. A 409 means the job finished first: the stream
+ * (or a refetch) brings its final state.
+ */
+export const cancelAnalysisMutation = (qc: QueryClient, leadId: string) => ({
+	mutationFn: (jobId: string) => api.cancelAnalysis(jobId),
+	onSuccess: (job: AnalysisJob) => {
+		writeAnalysis(qc, job);
+		return qc.invalidateQueries({ queryKey: keys.analyses(leadId) });
+	},
+	onError: (_err: Error, jobId: string) => qc.invalidateQueries({ queryKey: keys.analysis(jobId) })
+});
+
 export const createLeadMutation = (qc: QueryClient) => ({
 	mutationFn: (input: LeadCreate) => api.createLead(input),
 	onSuccess: () => qc.invalidateQueries({ queryKey: keys.leads })
