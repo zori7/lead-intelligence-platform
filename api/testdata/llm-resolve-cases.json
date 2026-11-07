@@ -1,0 +1,65 @@
+{
+	"$comment": "Effective LLM settings: effective = node override ?? default (SPEC.md §6.3). Shared by the Go Resolve test and the frontend preview test so both implementations follow one table.",
+	"cases": [
+		{
+			"name": "unconfigured default",
+			"settings": {
+				"default": { "model": null, "temperature": null },
+				"nodes": { "analyze_fit": { "model": "m", "temperature": null } }
+			},
+			"want": null
+		},
+		{
+			"name": "unconfigured default ignores a default temperature",
+			"settings": {
+				"default": { "model": null, "temperature": 0.7 },
+				"nodes": {}
+			},
+			"want": null
+		},
+		{
+			"name": "all inherit, default temperature",
+			"settings": {
+				"default": { "model": "base", "temperature": null },
+				"nodes": {}
+			},
+			"want": {
+				"extract_company": { "model": "base", "temperature": 0.2 },
+				"analyze_fit": { "model": "base", "temperature": 0.2 },
+				"analyze_intent": { "model": "base", "temperature": 0.2 },
+				"generate_recommendations": { "model": "base", "temperature": 0.2 }
+			}
+		},
+		{
+			"name": "overrides: model only, temperature only, both",
+			"settings": {
+				"default": { "model": "base", "temperature": 0.5 },
+				"nodes": {
+					"extract_company": { "model": "big", "temperature": null },
+					"analyze_fit": { "model": null, "temperature": null },
+					"analyze_intent": { "model": null, "temperature": 0 },
+					"generate_recommendations": { "model": "creative", "temperature": 1.2 }
+				}
+			},
+			"want": {
+				"extract_company": { "model": "big", "temperature": 0.5 },
+				"analyze_fit": { "model": "base", "temperature": 0.5 },
+				"analyze_intent": { "model": "base", "temperature": 0 },
+				"generate_recommendations": { "model": "creative", "temperature": 1.2 }
+			}
+		},
+		{
+			"name": "zero default temperature is kept, not replaced by 0.2",
+			"settings": {
+				"default": { "model": "base", "temperature": 0 },
+				"nodes": { "analyze_intent": { "model": null, "temperature": 2 } }
+			},
+			"want": {
+				"extract_company": { "model": "base", "temperature": 0 },
+				"analyze_fit": { "model": "base", "temperature": 0 },
+				"analyze_intent": { "model": "base", "temperature": 2 },
+				"generate_recommendations": { "model": "base", "temperature": 0 }
+			}
+		}
+	]
+}

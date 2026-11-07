@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -20,52 +21,49 @@ import (
 
 func ptr[T any](v T) *T { return &v }
 
+// resolveCasesFile is shared with the frontend preview test
+// (frontend/src/lib/schemas/llm-settings.test.ts), so the client-side
+// effective values follow the same rule as Resolve.
+const resolveCasesFile = "../../../api/testdata/llm-resolve-cases.json"
+
 func TestResolve(t *testing.T) {
-	tests := []struct {
-		name           string
-		settings       Settings
-		wantConfigured bool
-		want           Resolved
-	}{
-		{
-			name:     "unconfigured default",
-			settings: Settings{Nodes: map[Node]Setting{api.NodeAnalyzeFit: {Model: ptr("m")}}},
-		},
-		{
-			name:           "all inherit, default temperature",
-			settings:       Settings{Default: Setting{Model: ptr("base")}},
-			wantConfigured: true,
-			want: Resolved{
-				api.NodeExtractCompany:          {"base", 0.2},
-				api.NodeAnalyzeFit:              {"base", 0.2},
-				api.NodeAnalyzeIntent:           {"base", 0.2},
-				api.NodeGenerateRecommendations: {"base", 0.2},
-			},
-		},
-		{
-			name: "overrides: model only, temperature only, both",
-			settings: Settings{
-				Default: Setting{Model: ptr("base"), Temperature: ptr(0.5)},
-				Nodes: map[Node]Setting{
-					api.NodeExtractCompany:          {Model: ptr("big")},
-					api.NodeAnalyzeIntent:           {Temperature: ptr(0.0)},
-					api.NodeGenerateRecommendations: {Model: ptr("creative"), Temperature: ptr(1.2)},
-				},
-			},
-			wantConfigured: true,
-			want: Resolved{
-				api.NodeExtractCompany:          {"big", 0.5},
-				api.NodeAnalyzeFit:              {"base", 0.5},
-				api.NodeAnalyzeIntent:           {"base", 0},
-				api.NodeGenerateRecommendations: {"creative", 1.2},
-			},
-		},
+	raw, err := os.ReadFile(resolveCasesFile)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, ok := Resolve(tt.settings)
-			if ok != tt.wantConfigured || !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("Resolve = %v, %v; want %v, %v", got, ok, tt.want, tt.wantConfigured)
+	type setting struct {
+		Model       *string  `json:"model"`
+		Temperature *float64 `json:"temperature"`
+	}
+	var file struct {
+		Cases []struct {
+			Name     string `json:"name"`
+			Settings struct {
+				Default setting          `json:"default"`
+				Nodes   map[Node]setting `json:"nodes"`
+			} `json:"settings"`
+			Want Resolved `json:"want"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &file); err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Cases) == 0 {
+		t.Fatal("no cases")
+	}
+	for _, tt := range file.Cases {
+		t.Run(tt.Name, func(t *testing.T) {
+			s := Settings{
+				Default: Setting(tt.Settings.Default),
+				Nodes:   map[Node]Setting{},
+			}
+			for n, v := range tt.Settings.Nodes {
+				s.Nodes[n] = Setting(v)
+			}
+			got, ok := Resolve(s)
+			wantConfigured := tt.Want != nil
+			if ok != wantConfigured || !reflect.DeepEqual(got, tt.Want) {
+				t.Fatalf("Resolve = %v, %v; want %v, %v", got, ok, tt.Want, wantConfigured)
 			}
 		})
 	}

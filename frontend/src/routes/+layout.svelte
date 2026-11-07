@@ -1,5 +1,6 @@
 <script lang="ts">
 	import './layout.css';
+	import { page } from '$app/state';
 	import { QueryClient, QueryClientProvider } from '@tanstack/svelte-query';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import { Toaster } from '#lib/components/ui/sonner/index.js';
@@ -7,6 +8,8 @@
 	import type { LayoutProps } from './$types';
 
 	let { children }: LayoutProps = $props();
+
+	const onLeads = $derived(page.url.pathname === '/' || page.url.pathname.startsWith('/leads'));
 
 	const queryClient = new QueryClient({
 		defaultOptions: {
@@ -37,8 +40,11 @@
 				<nav class="hidden items-center gap-1 sm:flex" aria-label="Main">
 					<a
 						href="/"
-						aria-current="page"
-						class="btn-glow rounded-full px-5 py-1.5 text-sm font-medium"
+						aria-current={onLeads ? 'page' : undefined}
+						class={[
+							'rounded-full px-5 py-1.5 text-sm font-medium',
+							onLeads ? 'btn-glow' : 'text-muted-foreground hover:text-foreground'
+						]}
 					>
 						Leads
 					</a>

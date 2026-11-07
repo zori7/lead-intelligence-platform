@@ -299,7 +299,7 @@ lead-intelligence-platform/
             │   ├── queries.ts    # TanStack Query keys, query + mutation factories
             │   └── live-analysis.ts  # SSE subscription → writes into the query cache
             ├── schemas/{lead,llm-settings}.ts   # form adapters over the generated zod schemas
-            ├── admin-token.ts    # get/set/clear admin token (sessionStorage, try/catch)
+            ├── admin-token.svelte.ts  # reactive admin session: token in sessionStorage (try/catch), lock/unlock
             ├── motion/
             │   ├── gsap.ts       # gsap setup, defaults, reduced-motion
             │   └── attachments.ts    # {@attach} helpers: fadeIn, stagger, countUp, drawRing
@@ -1136,7 +1136,7 @@ export function subscribeToAnalysis(qc: QueryClient, jobId: string): () => void 
 
 All requests use relative `/api/...` paths: the Vite dev proxy forwards them in development and nginx does in Docker. Everything is same-origin, so no CORS is needed.
 
-Admin calls add `Authorization: Bearer <token>` from `admin-token.ts`. On a `401`, the client clears the stored token and the gate asks for it again.
+Admin calls add `Authorization: Bearer <token>` from `admin-token.svelte.ts`. On a `401`, the client clears the stored token and the gate asks for it again.
 
 ### 10.7 Superadmin page (`/admin`)
 
@@ -1530,7 +1530,7 @@ Every milestone ends in a runnable, demonstrable state.
 **Goal:** A superadmin can choose the default model and per-node overrides (model and temperature) from `/admin`. Leads UI reflects whether AI is configured and which models produced each result.
 
 **Files**
-- `frontend/src/routes/admin/{+layout.svelte,+page.svelte}`, `src/lib/admin-token.ts`, `src/lib/schemas/llm-settings.ts`, `src/lib/api/{client,queries,types}.ts` (admin and config calls), `components/admin/{AdminTokenGate,ModelSettingsForm,NodeModelRow,ModelSelect}.svelte`
+- `frontend/src/routes/admin/{+layout.svelte,+page.svelte}`, `src/lib/admin-token.svelte.ts`, `src/lib/schemas/llm-settings.ts`, `src/lib/api/{client,queries,types}.ts` (admin and config calls), `components/admin/{AdminTokenGate,ModelSettingsForm,NodeModelRow,ModelSelect}.svelte`
 - `components/analysis/AnalysisPanel.svelte` (not-configured state, models-used footer)
 
 **Tasks**
@@ -1553,7 +1553,7 @@ Every milestone ends in a runnable, demonstrable state.
 - A saved model that disappears from the server is flagged in the table.
 
 **Verify**
-- `vitest`: the client-side effective-value function matches the Go `Resolve` cases (same table of cases).
+- `vitest`: the client-side effective-value function matches the Go `Resolve` cases. Both tests read one table, `api/testdata/llm-resolve-cases.json`.
 - Manual walkthrough of the five criteria above.
 
 ---

@@ -112,7 +112,7 @@ Without a `.codegraph/` directory, skip CodeGraph; indexing is the developer's c
 ```bash
 make test-go        # Go unit, contract and store integration tests (needs `make up`)
 make test-ai        # Python unit tests (offline: fake LLM, website fixtures)
-make test-web       # svelte-check
+make test-web       # svelte-check + vitest
 make openapi-check  # generated API code is current
 make proto-check    # generated gRPC code is current
 ```

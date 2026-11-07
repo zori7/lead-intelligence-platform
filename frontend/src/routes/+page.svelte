@@ -2,13 +2,14 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { createQuery } from '@tanstack/svelte-query';
+	import InfoIcon from '@lucide/svelte/icons/info';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
 	import LeadFilters from '#lib/components/leads/LeadFilters.svelte';
 	import LeadTable from '#lib/components/leads/LeadTable.svelte';
 	import LeadForm from '#lib/components/leads/LeadForm.svelte';
-	import { leadsQuery } from '#lib/api/queries.js';
+	import { configQuery, leadsQuery } from '#lib/api/queries.js';
 	import {
 		LEAD_SORTS,
 		LEAD_STATUSES,
@@ -37,6 +38,7 @@
 	const pageNum = $derived(filters.offset / PAGE_SIZE + 1);
 
 	const leads = createQuery(() => leadsQuery(filters));
+	const config = createQuery(() => configQuery());
 
 	let formOpen = $state(false);
 
@@ -81,6 +83,24 @@
 			<PlusIcon /> Add lead
 		</Button>
 	</div>
+
+	{#if config.data?.ai_configured === false}
+		<div
+			class="flex items-start gap-3 rounded-2xl bg-sky-400/[0.08] px-4 py-3 ring-1 ring-sky-300/20 ring-inset"
+			role="status"
+		>
+			<InfoIcon class="mt-0.5 size-4 shrink-0 text-sky-300" />
+			<p class="text-sm">
+				<span class="font-medium">AI not configured.</span>
+				<span class="text-muted-foreground">
+					Leads can be managed, but analysis is disabled until an admin chooses a default model (<a
+						href="/admin"
+						class="text-sky-300 hover:underline">/admin</a
+					>).
+				</span>
+			</p>
+		</div>
+	{/if}
 
 	<LeadFilters status={filters.status} q={filters.q} sort={filters.sort} onchange={setParams} />
 

@@ -90,7 +90,7 @@ Generated code is committed. `make openapi-check` fails if it is out of date, an
 ```bash
 make test-go     # Go unit tests + store integration tests (creates the leadintel_test database)
 make test-ai     # Python tests: fake LLM, website fixtures, in-process gRPC (no network)
-make test-web    # svelte-check
+make test-web    # svelte-check + vitest
 make openapi-check  # generated API code matches api/openapi.yaml
 make proto-check    # generated gRPC code matches proto/
 ```

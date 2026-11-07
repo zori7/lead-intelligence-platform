@@ -84,8 +84,8 @@ test-go: db ## Go unit + store integration tests
 test-ai: ## Python unit tests (offline: fake LLM, website fixtures)
 	cd ai && uv run pytest -q
 
-test-web: ## Frontend type check
-	cd frontend && npm run check
+test-web: ## Frontend type check and unit tests
+	cd frontend && npm run check && npm test
 
 lint: openapi-check proto-check ## Static checks (including generated-code freshness)
 	cd backend && go vet ./...

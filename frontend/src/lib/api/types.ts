@@ -1,6 +1,6 @@
 // API types. The wire types are generated from api/openapi.yaml into ./gen
 // (run `make openapi`); this module re-exports them and adds frontend-only types.
-import { zCompanySize, zLeadSort, zLeadStatus } from './gen/zod.gen.js';
+import { zCompanySize, zLeadSort, zLeadStatus, zLlmNode } from './gen/zod.gen.js';
 import type { JobStatus, LeadStatus, LeadSort } from './gen/types.gen.js';
 
 export type {
@@ -29,6 +29,13 @@ export type {
 	LeadPatch,
 	LeadSort,
 	LeadStatus,
+	LlmDefaultSetting,
+	LlmNode,
+	LlmNodeSetting,
+	LlmNodeUpdate,
+	LlmSettings,
+	LlmSettingsUpdate,
+	ModelList,
 	Tier
 } from './gen/types.gen.js';
 
@@ -36,6 +43,8 @@ export type {
 export const LEAD_STATUSES = zLeadStatus.options;
 export const COMPANY_SIZES = zCompanySize.options;
 export const LEAD_SORTS = zLeadSort.unwrap().options;
+/** The LLM workflow steps, in workflow order. */
+export const LLM_NODES = zLlmNode.options;
 
 /** Lead list filters as held in the URL (frontend-only). */
 export interface LeadFilters {

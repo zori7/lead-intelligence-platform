@@ -7,7 +7,10 @@ import type {
 	LeadFilters,
 	LeadCreate,
 	LeadList,
-	LeadPatch
+	LeadPatch,
+	LlmSettings,
+	LlmSettingsUpdate,
+	ModelList
 } from './types.js';
 
 /** A non-2xx API response (or a network failure, with status 0). */
@@ -29,12 +32,20 @@ interface ErrorEnvelope {
 	error?: { code?: string; message?: string; fields?: Record<string, string> };
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(
+	method: string,
+	path: string,
+	body?: unknown,
+	token?: string
+): Promise<T> {
+	const headers: Record<string, string> = {};
+	if (body !== undefined) headers['Content-Type'] = 'application/json';
+	if (token !== undefined) headers['Authorization'] = `Bearer ${token}`;
 	let res: Response;
 	try {
 		res = await fetch(path, {
 			method,
-			headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+			headers,
 			body: body === undefined ? undefined : JSON.stringify(body)
 		});
 	} catch {
@@ -85,6 +96,16 @@ export const api = {
 	cancelAnalysis: (id: string) =>
 		request<AnalysisJob>('POST', `/api/analyses/${encodeURIComponent(id)}/cancel`),
 	getConfig: () => request<AppConfig>('GET', '/api/config')
+};
+
+/** Superadmin endpoints; every call carries the admin token. */
+export const adminApi = {
+	getLlmSettings: (token: string) =>
+		request<LlmSettings>('GET', '/api/admin/llm-settings', undefined, token),
+	putLlmSettings: (token: string, body: LlmSettingsUpdate) =>
+		request<LlmSettings>('PUT', '/api/admin/llm-settings', body, token),
+	listLlmModels: (token: string) =>
+		request<ModelList>('GET', '/api/admin/llm-models', undefined, token)
 };
 
 /** URL of a job's Server-Sent Events stream (consumed by live-analysis.ts). */

@@ -1,5 +1,6 @@
 import { keepPreviousData, queryOptions, type QueryClient } from '@tanstack/svelte-query';
-import { ApiError, api } from './client.js';
+import { adminSession } from '#lib/admin-token.svelte.js';
+import { ApiError, adminApi, api } from './client.js';
 import type {
 	AnalysisJob,
 	Lead,
@@ -7,7 +8,9 @@ import type {
 	LeadFilters,
 	LeadCreate,
 	LeadPatch,
-	LeadStatus
+	LeadStatus,
+	LlmSettings,
+	LlmSettingsUpdate
 } from './types.js';
 
 export const keys = {
@@ -16,7 +19,10 @@ export const keys = {
 	lead: (id: string) => ['lead', id] as const,
 	analyses: (leadId: string) => ['analyses', leadId] as const,
 	analysis: (jobId: string) => ['analysis', jobId] as const,
-	config: ['config'] as const
+	config: ['config'] as const,
+	admin: ['admin'] as const,
+	llmSettings: ['admin', 'llm-settings'] as const,
+	llmModels: ['admin', 'llm-models'] as const
 };
 
 /** How many past analyses the history list shows. */
@@ -147,5 +153,66 @@ export const deleteLeadMutation = (qc: QueryClient, id: string) => ({
 	onSuccess: () => {
 		qc.removeQueries({ queryKey: keys.lead(id) });
 		return qc.invalidateQueries({ queryKey: keys.leads });
+	}
+});
+
+// ---- Superadmin ---------------------------------------------------------------
+
+const hasStatus = (err: Error, ...statuses: number[]) =>
+	err instanceof ApiError && statuses.includes(err.status);
+
+/**
+ * Runs an admin call with the session token. A 401 means the token is wrong or
+ * was rotated on the server, so the session locks and the page shows the gate.
+ */
+async function asAdmin<T>(call: (token: string) => Promise<T>): Promise<T> {
+	const token = adminSession.token;
+	if (token === null) throw new ApiError(401, 'unauthorized', 'Admin token required.');
+	try {
+		return await call(token);
+	} catch (err) {
+		if (err instanceof ApiError && err.status === 401) adminSession.lock();
+		throw err;
+	}
+}
+
+export const llmSettingsQuery = () =>
+	queryOptions({
+		queryKey: keys.llmSettings,
+		queryFn: () => asAdmin(adminApi.getLlmSettings),
+		retry: (count, err) => !hasStatus(err, 401) && count < 3
+	});
+
+/**
+ * Models on the LLM server. A 503 (server unreachable) is shown at once with a
+ * Refresh button instead of being retried in the background.
+ */
+export const llmModelsQuery = () =>
+	queryOptions({
+		queryKey: keys.llmModels,
+		queryFn: () => asAdmin(adminApi.listLlmModels),
+		retry: (count, err) => !hasStatus(err, 401, 503) && count < 2
+	});
+
+/**
+ * Checks a token by loading the settings with it. On success the token is
+ * kept for the session and the settings seed the cache; anything cached under
+ * a previous token is dropped first.
+ */
+export const unlockAdminMutation = (qc: QueryClient) => ({
+	mutationFn: (token: string) => adminApi.getLlmSettings(token),
+	onSuccess: (settings: LlmSettings, token: string) => {
+		qc.removeQueries({ queryKey: keys.admin });
+		qc.setQueryData(keys.llmSettings, settings);
+		adminSession.unlock(token);
+	}
+});
+
+/** Full-replace save. The response is authoritative; `['config']` follows it. */
+export const saveLlmSettingsMutation = (qc: QueryClient) => ({
+	mutationFn: (body: LlmSettingsUpdate) => asAdmin((t) => adminApi.putLlmSettings(t, body)),
+	onSuccess: (settings: LlmSettings) => {
+		qc.setQueryData(keys.llmSettings, settings);
+		return qc.invalidateQueries({ queryKey: keys.config });
 	}
 });
