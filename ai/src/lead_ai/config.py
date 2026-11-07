@@ -9,7 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, HttpUrl
+from pydantic import Field, HttpUrl, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_ICP = (
@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     web_fetch_enabled: bool = True
     web_fetch_timeout_seconds: float = Field(default=10, gt=0, le=60)
     web_fetch_max_chars: int = Field(default=6000, ge=500, le=50_000)
+
+    @field_validator("icp_description", mode="before")
+    @classmethod
+    def _blank_icp_is_default(cls, v: object) -> object:
+        # Docker Compose passes an unset variable as an empty string.
+        return DEFAULT_ICP if isinstance(v, str) and not v.strip() else v
 
     @property
     def llm_base(self) -> str:

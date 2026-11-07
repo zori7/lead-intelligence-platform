@@ -1,10 +1,27 @@
 // API types. The wire types are generated from api/openapi.yaml into ./gen
 // (run `make openapi`); this module re-exports them and adds frontend-only types.
 import { zCompanySize, zLeadSort, zLeadStatus } from './gen/zod.gen.js';
-import type { LeadStatus, LeadSort } from './gen/types.gen.js';
+import type { JobStatus, LeadStatus, LeadSort } from './gen/types.gen.js';
 
 export type {
+	AnalysisJob,
+	AnalysisJobList,
+	AnalysisProgressEvent,
+	AnalysisResult,
+	AnalysisStep,
+	AppConfig,
+	CompanyInsights,
 	CompanySize,
+	FitAnalysis,
+	IntentAnalysis,
+	JobStatus,
+	LeadScore,
+	Priority,
+	Recommendation,
+	ResultMeta,
+	StepName,
+	StepState,
+	WebsiteFetch,
 	Lead,
 	LeadCreate,
 	LeadDetail,
@@ -28,3 +45,6 @@ export interface LeadFilters {
 	limit: number;
 	offset: number;
 }
+
+/** Queued and running jobs are active: they can still change. */
+export const isActiveJob = (status: JobStatus) => status === 'queued' || status === 'running';

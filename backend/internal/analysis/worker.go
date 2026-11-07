@@ -18,8 +18,13 @@ type JobStore interface {
 	ClaimNext(ctx context.Context, models llmsettings.Resolved) (Job, bool, error)
 	AddDispatchAttempt(ctx context.Context, id uuid.UUID) error
 	UpdateProgress(ctx context.Context, id uuid.UUID, steps []Step, progress int) (bool, error)
-	Complete(ctx context.Context, id uuid.UUID, steps []Step, result api.AnalysisResult) (bool, error)
-	Fail(ctx context.Context, id uuid.UUID, steps []Step, e JobError) (bool, error)
+	Complete(ctx context.Context, id uuid.UUID, steps []Step, result api.AnalysisResult) (Job, bool, error)
+	Fail(ctx context.Context, id uuid.UUID, steps []Step, e JobError) (Job, bool, error)
+}
+
+// Publisher receives job events after they are persisted (implemented by *Broker).
+type Publisher interface {
+	Publish(jobID uuid.UUID, ev StreamEvent)
 }
 
 // SettingsSource provides the current LLM settings (implemented by llmsettings.Store).
@@ -64,12 +69,13 @@ type Worker struct {
 	store    JobStore
 	settings SettingsSource
 	ai       Analyzer
+	events   Publisher
 	cfg      WorkerConfig
 	wake     chan struct{}
 }
 
-func NewWorker(store JobStore, settings SettingsSource, ai Analyzer, cfg WorkerConfig) *Worker {
-	return &Worker{store: store, settings: settings, ai: ai, cfg: cfg.withDefaults(), wake: make(chan struct{}, 1)}
+func NewWorker(store JobStore, settings SettingsSource, ai Analyzer, events Publisher, cfg WorkerConfig) *Worker {
+	return &Worker{store: store, settings: settings, ai: ai, events: events, cfg: cfg.withDefaults(), wake: make(chan struct{}, 1)}
 }
 
 // Wake signals that a job may be waiting. It never blocks.
@@ -151,26 +157,36 @@ func (w *Worker) run(ctx context.Context, job Job) {
 		received = true
 		switch {
 		case ev.Progress != nil:
-			steps.set(ev.Progress.Step, ev.Progress.State)
-			if _, err := w.store.UpdateProgress(jobCtx, job.ID, steps.list(), ev.Progress.Percent); err != nil {
+			p := ev.Progress
+			steps.set(p.Step, p.State)
+			ok, err := w.store.UpdateProgress(jobCtx, job.ID, steps.list(), p.Percent)
+			if err != nil {
 				return err
+			}
+			if ok {
+				w.events.Publish(job.ID, StreamEvent{Name: EventProgress,
+					Data: api.AnalysisProgressEvent{Step: p.Step, State: p.State, Progress: p.Percent}})
 			}
 		case ev.Completed != nil:
 			terminal = true
 			tctx, cancel := terminalCtx()
 			defer cancel()
-			if _, err := w.store.Complete(tctx, job.ID, steps.finish(true), *ev.Completed); err != nil {
+			done, ok, err := w.store.Complete(tctx, job.ID, steps.finish(true), *ev.Completed)
+			if err != nil {
 				return err
 			}
+			w.publishTerminal(done, ok)
 			log.Info("analysis succeeded", "score", ev.Completed.Score.Value)
 		case ev.Failed != nil:
 			terminal = true
 			tctx, cancel := terminalCtx()
 			defer cancel()
 			f := ev.Failed
-			if _, err := w.store.Fail(tctx, job.ID, steps.finish(false), JobError{Code: f.Code, Message: f.Message, Retryable: f.Retryable}); err != nil {
+			failed, ok, err := w.store.Fail(tctx, job.ID, steps.finish(false), JobError{Code: f.Code, Message: f.Message, Retryable: f.Retryable})
+			if err != nil {
 				return err
 			}
+			w.publishTerminal(failed, ok)
 			log.Info("analysis failed", "code", f.Code, "retryable", f.Retryable)
 		}
 		return nil
@@ -200,8 +216,22 @@ func (w *Worker) run(ctx context.Context, job Job) {
 	log.Warn("analysis failed", "code", jobErr.Code, "err", err)
 	tctx, cancel := terminalCtx()
 	defer cancel()
-	if _, ferr := w.store.Fail(tctx, job.ID, steps.finish(false), jobErr); ferr != nil {
+	failed, ok, ferr := w.store.Fail(tctx, job.ID, steps.finish(false), jobErr)
+	if ferr != nil {
 		log.Error("record analysis failure", "err", ferr)
+		return
+	}
+	w.publishTerminal(failed, ok)
+}
+
+// publishTerminal announces a job's final state. ok=false means another
+// writer reached a terminal state first; that writer publishes instead.
+func (w *Worker) publishTerminal(job Job, ok bool) {
+	if !ok {
+		return
+	}
+	if name := terminalEvent(job.Status); name != "" {
+		w.events.Publish(job.ID, StreamEvent{Name: name, Data: job})
 	}
 }
 

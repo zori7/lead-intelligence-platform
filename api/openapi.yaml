@@ -179,6 +179,39 @@ paths:
               schema: { $ref: '#/components/schemas/AnalysisJob' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /analyses/{id}/events:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: A malformed ID is treated as unknown (404).
+        schema: { type: string, format: uuid }
+    get:
+      operationId: streamAnalysisEvents
+      summary: Live progress of an analysis (Server-Sent Events)
+      description: |
+        The first event is always `snapshot` (an `AnalysisJob` read from the database), so a
+        reconnect never misses state. Then:
+
+        | Event | `data` |
+        |---|---|
+        | `progress` | `AnalysisProgressEvent`, one per step transition |
+        | `completed` | `AnalysisJob` with `result`; terminal |
+        | `failed` | `AnalysisJob` with `error`; terminal |
+        | `cancelled` | `AnalysisJob`; terminal |
+
+        The server closes the stream after a terminal event; for a job that is already
+        finished it sends `snapshot`, the matching terminal event, and closes. A `: ping`
+        comment is sent every 15 seconds while the job runs.
+      tags: [analyses]
+      responses:
+        '200':
+          description: An event stream (see the operation description for event types).
+          content:
+            text/event-stream:
+              schema: { type: string }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /config:
     get:
       operationId: getConfig
@@ -530,6 +563,17 @@ components:
         created_at: { type: string, format: date-time }
         started_at: { type: string, format: date-time, nullable: true }
         finished_at: { type: string, format: date-time, nullable: true }
+
+    AnalysisProgressEvent:
+      type: object
+      additionalProperties: false
+      description: '`data` of a `progress` event on the analysis event stream.'
+      required: [step, state, progress]
+      properties:
+        step: { $ref: '#/components/schemas/StepName' }
+        state: { $ref: '#/components/schemas/StepState' }
+        progress: { type: integer, minimum: 0, maximum: 100 }
+        message: { type: string }
 
     AnalysisJobList:
       type: object

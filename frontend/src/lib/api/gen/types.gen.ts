@@ -156,6 +156,16 @@ export type AnalysisJob = {
     finished_at: string | null;
 };
 
+/**
+ * `data` of a `progress` event on the analysis event stream.
+ */
+export type AnalysisProgressEvent = {
+    step: StepName;
+    state: StepState;
+    progress: number;
+    message?: string;
+};
+
 export type AnalysisJobList = {
     items: Array<AnalysisJob>;
 };
@@ -599,6 +609,36 @@ export type GetAnalysisResponses = {
 };
 
 export type GetAnalysisResponse = GetAnalysisResponses[keyof GetAnalysisResponses];
+
+export type StreamAnalysisEventsData = {
+    body?: never;
+    path: {
+        /**
+         * A malformed ID is treated as unknown (404).
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/analyses/{id}/events';
+};
+
+export type StreamAnalysisEventsErrors = {
+    /**
+     * `not_found`
+     */
+    404: Error;
+};
+
+export type StreamAnalysisEventsError = StreamAnalysisEventsErrors[keyof StreamAnalysisEventsErrors];
+
+export type StreamAnalysisEventsResponses = {
+    /**
+     * An event stream (see the operation description for event types).
+     */
+    200: string;
+};
+
+export type StreamAnalysisEventsResponse = StreamAnalysisEventsResponses[keyof StreamAnalysisEventsResponses];
 
 export type GetConfigData = {
     body?: never;

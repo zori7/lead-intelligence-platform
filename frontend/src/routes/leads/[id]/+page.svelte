@@ -13,6 +13,7 @@
 	import LeadStatusSelect from '#lib/components/leads/LeadStatusSelect.svelte';
 	import LeadStatusBadge from '#lib/components/leads/LeadStatusBadge.svelte';
 	import CompanyAvatar from '#lib/components/leads/CompanyAvatar.svelte';
+	import AnalysisPanel from '#lib/components/analysis/AnalysisPanel.svelte';
 	import { formatDateTime } from '#lib/components/leads/labels.js';
 	import { ApiError } from '#lib/api/client.js';
 	import { deleteLeadMutation, leadQuery, updateStatusMutation } from '#lib/api/queries.js';
@@ -115,6 +116,8 @@
 				{/if}
 			</Card.Content>
 		</Card.Root>
+
+		<AnalysisPanel leadId={lead.id} latest={detail.data?.latest_analysis ?? null} />
 
 		<LeadForm bind:open={editOpen} {lead} />
 

@@ -132,53 +132,57 @@ func (s *Store) UpdateProgress(ctx context.Context, id uuid.UUID, steps []Step, 
 }
 
 // Complete marks a running job succeeded and copies the score onto the lead,
-// in one transaction. It returns false when the job was no longer running.
-func (s *Store) Complete(ctx context.Context, id uuid.UUID, steps []Step, result api.AnalysisResult) (bool, error) {
+// in one transaction. It returns the updated job, or ok=false when the job was
+// no longer running.
+func (s *Store) Complete(ctx context.Context, id uuid.UUID, steps []Step, result api.AnalysisResult) (job Job, ok bool, err error) {
 	body, err := json.Marshal(result)
 	if err != nil {
-		return false, fmt.Errorf("encode result: %w", err)
+		return Job{}, false, fmt.Errorf("encode result: %w", err)
 	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return false, fmt.Errorf("begin: %w", err)
+		return Job{}, false, fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var leadID uuid.UUID
-	err = tx.QueryRow(ctx, `UPDATE analysis_jobs
+	job, err = scanJob(tx.QueryRow(ctx, `UPDATE analysis_jobs
 		SET status = 'succeeded', steps = $2, progress = 100, result = $3,
 		    finished_at = now(), updated_at = now()
 		WHERE id = $1 AND status = 'running'
-		RETURNING lead_id`, id, steps, body).Scan(&leadID)
+		RETURNING `+jobColumns, id, steps, body))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
+		return Job{}, false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("complete analysis: %w", err)
+		return Job{}, false, fmt.Errorf("complete analysis: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE leads
 		SET ai_score = $2, ai_tier = $3, last_analyzed_at = now(), updated_at = now()
-		WHERE id = $1`, leadID, result.Score.Value, result.Score.Tier); err != nil {
-		return false, fmt.Errorf("update lead score: %w", err)
+		WHERE id = $1`, job.LeadID, result.Score.Value, result.Score.Tier); err != nil {
+		return Job{}, false, fmt.Errorf("update lead score: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("commit: %w", err)
+		return Job{}, false, fmt.Errorf("commit: %w", err)
 	}
-	return true, nil
+	return job, true, nil
 }
 
-// Fail marks a queued or running job failed. It returns false when the job
-// had already reached a terminal state.
-func (s *Store) Fail(ctx context.Context, id uuid.UUID, steps []Step, e JobError) (bool, error) {
-	tag, err := s.db.Exec(ctx, `UPDATE analysis_jobs
+// Fail marks a queued or running job failed. It returns the updated job, or
+// ok=false when the job had already reached a terminal state.
+func (s *Store) Fail(ctx context.Context, id uuid.UUID, steps []Step, e JobError) (job Job, ok bool, err error) {
+	job, err = scanJob(s.db.QueryRow(ctx, `UPDATE analysis_jobs
 		SET status = 'failed', steps = $2, error_code = $3, error_message = $4, retryable = $5,
 		    finished_at = now(), updated_at = now()
-		WHERE id = $1 AND status IN ('queued', 'running')`,
-		id, steps, e.Code, e.Message, e.Retryable)
-	if err != nil {
-		return false, fmt.Errorf("fail analysis: %w", err)
+		WHERE id = $1 AND status IN ('queued', 'running')
+		RETURNING `+jobColumns,
+		id, steps, e.Code, e.Message, e.Retryable))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Job{}, false, nil
 	}
-	return tag.RowsAffected() == 1, nil
+	if err != nil {
+		return Job{}, false, fmt.Errorf("fail analysis: %w", err)
+	}
+	return job, true, nil
 }
 
 func (s *Store) Get(ctx context.Context, id uuid.UUID) (Job, error) {

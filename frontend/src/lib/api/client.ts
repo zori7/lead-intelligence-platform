@@ -1,4 +1,14 @@
-import type { Lead, LeadDetail, LeadFilters, LeadCreate, LeadList, LeadPatch } from './types.js';
+import type {
+	AnalysisJob,
+	AnalysisJobList,
+	AppConfig,
+	Lead,
+	LeadDetail,
+	LeadFilters,
+	LeadCreate,
+	LeadList,
+	LeadPatch
+} from './types.js';
 
 /** A non-2xx API response (or a network failure, with status 0). */
 export class ApiError extends Error {
@@ -62,5 +72,18 @@ export const api = {
 	createLead: (input: LeadCreate) => request<Lead>('POST', '/api/leads', input),
 	updateLead: (id: string, patch: LeadPatch) =>
 		request<Lead>('PATCH', `/api/leads/${encodeURIComponent(id)}`, patch),
-	deleteLead: (id: string) => request<void>('DELETE', `/api/leads/${encodeURIComponent(id)}`)
+	deleteLead: (id: string) => request<void>('DELETE', `/api/leads/${encodeURIComponent(id)}`),
+	triggerAnalysis: (leadId: string) =>
+		request<AnalysisJob>('POST', `/api/leads/${encodeURIComponent(leadId)}/analyses`),
+	listAnalyses: (leadId: string, limit: number) =>
+		request<AnalysisJobList>(
+			'GET',
+			`/api/leads/${encodeURIComponent(leadId)}/analyses?limit=${limit}`
+		),
+	getAnalysis: (id: string) =>
+		request<AnalysisJob>('GET', `/api/analyses/${encodeURIComponent(id)}`),
+	getConfig: () => request<AppConfig>('GET', '/api/config')
 };
+
+/** URL of a job's Server-Sent Events stream (consumed by live-analysis.ts). */
+export const analysisEventsUrl = (id: string) => `/api/analyses/${encodeURIComponent(id)}/events`;

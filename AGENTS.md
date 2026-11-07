@@ -58,7 +58,7 @@ habit, the rule wins.
   every request and redirect hop. Never fetch lead URLs with another client.
 - Tests never touch the network. Website tests replay fixtures through `httpx.MockTransport`;
   commit only synthetic fixtures (fictional companies, `*.example`). Real-site recordings stay
-  in the git-ignored `tests/fixtures/websites/recorded/` (SPEC.md D12).
+  in the git-ignored `tests/fixtures/websites/recorded/` (SPEC.md §9.7).
 - `uv run ruff check .` and `uv run ruff format --check .` must be clean.
 
 ## Database

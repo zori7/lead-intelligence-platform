@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -76,7 +77,8 @@ func run() error {
 	leads := lead.NewStore(pool)
 	jobs := analysis.NewStore(pool)
 	settings := llmsettings.NewStore(pool)
-	worker := analysis.NewWorker(jobs, settings, ai, analysis.WorkerConfig{
+	broker := analysis.NewBroker()
+	worker := analysis.NewWorker(jobs, settings, ai, broker, analysis.WorkerConfig{
 		Workers:          cfg.AnalysisWorkers,
 		Timeout:          cfg.AnalysisTimeout,
 		DispatchAttempts: cfg.AIDispatchAttempts,
@@ -96,7 +98,7 @@ func run() error {
 	latest := func(ctx context.Context, id uuid.UUID) (any, error) { return jobs.Latest(ctx, id) }
 	handlers := server{
 		Handler:         lead.NewHandler(leads, latest),
-		analysisHandler: analysis.NewHandler(jobs, leads, settings, worker),
+		analysisHandler: analysis.NewHandler(jobs, leads, settings, worker, broker),
 		settingsHandler: llmsettings.NewHandler(settings, ai),
 	}
 
@@ -107,6 +109,9 @@ func run() error {
 		ReadTimeout:       15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	// Open event streams would otherwise hold Shutdown until its timeout;
+	// clients reconnect and resume from a snapshot.
+	srv.RegisterOnShutdown(broker.Close)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -187,10 +192,10 @@ func newRouter(pool *pgxpool.Pool, handlers api.ServerInterface, adminToken stri
 	})
 
 	r.Route("/api", func(r chi.Router) {
-		// Request/response endpoints get a hard deadline. Long-lived streams
-		// (SSE) will be mounted outside this group.
 		r.Group(func(r chi.Router) {
-			r.Use(middleware.Timeout(30 * time.Second))
+			// Request/response endpoints get a hard deadline; event streams are
+			// long-lived and end on their own (terminal event or disconnect).
+			r.Use(timeoutExceptStreams(30 * time.Second))
 			// Every /api/admin/* route requires the admin token (fails closed for new routes).
 			r.Use(httpx.RequireAdmin(adminToken, "/api/admin/"))
 			// Routes are generated from api/openapi.yaml (internal/api).
@@ -201,4 +206,19 @@ func newRouter(pool *pgxpool.Pool, handlers api.ServerInterface, adminToken stri
 		})
 	})
 	return r
+}
+
+// timeoutExceptStreams applies middleware.Timeout to every request except the
+// SSE endpoints (GET …/events), whose context must outlive any fixed deadline.
+func timeoutExceptStreams(d time.Duration) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		timed := middleware.Timeout(d)(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/events") {
+				next.ServeHTTP(w, r)
+				return
+			}
+			timed.ServeHTTP(w, r)
+		})
+	}
 }

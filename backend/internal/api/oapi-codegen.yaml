@@ -8,3 +8,6 @@ output: openapi.gen.go
 output-options:
   # nullable + optional fields become nullable.Nullable[T] (absent / null / value).
   nullable-type: true
+  # Keep schemas that no operation references directly, such as the SSE event
+  # payloads (AnalysisProgressEvent): they are part of the contract too.
+  skip-prune: true

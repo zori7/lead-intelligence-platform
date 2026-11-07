@@ -79,27 +79,27 @@ func (s *memStore) UpdateProgress(_ context.Context, id uuid.UUID, steps []Step,
 	return true, nil
 }
 
-func (s *memStore) Complete(_ context.Context, id uuid.UUID, steps []Step, r api.AnalysisResult) (bool, error) {
+func (s *memStore) Complete(_ context.Context, id uuid.UUID, steps []Step, r api.AnalysisResult) (Job, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	j := s.jobs[id]
 	if j.Status != api.JobRunning {
-		return false, nil
+		return Job{}, false, nil
 	}
 	body, _ := json.Marshal(r)
 	j.Status, j.Steps, j.Progress, j.Result = api.JobSucceeded, steps, 100, body
-	return true, nil
+	return *j, true, nil
 }
 
-func (s *memStore) Fail(_ context.Context, id uuid.UUID, steps []Step, e JobError) (bool, error) {
+func (s *memStore) Fail(_ context.Context, id uuid.UUID, steps []Step, e JobError) (Job, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	j := s.jobs[id]
 	if j.Status != api.JobRunning && j.Status != api.JobQueued {
-		return false, nil
+		return Job{}, false, nil
 	}
 	j.Status, j.Steps, j.Error = api.JobFailed, steps, &e
-	return true, nil
+	return *j, true, nil
 }
 
 func (s *memStore) get(id uuid.UUID) Job {
@@ -161,7 +161,7 @@ func runOne(t *testing.T, store *memStore, ai Analyzer, cfg WorkerConfig) {
 		cfg.Timeout = 5 * time.Second
 	}
 	cfg.Backoff = func(int) time.Duration { return time.Millisecond }
-	w := NewWorker(store, fakeSettings{configured()}, ai, cfg)
+	w := NewWorker(store, fakeSettings{configured()}, ai, NewBroker(), cfg)
 	if !w.processNext(context.Background()) {
 		t.Fatal("no job was claimed")
 	}
@@ -286,7 +286,7 @@ func TestWorker(t *testing.T) {
 
 func TestWorkerNotConfiguredClaimsNothing(t *testing.T) {
 	store := newMemStore(queuedJob())
-	w := NewWorker(store, fakeSettings{}, &scriptAnalyzer{}, WorkerConfig{})
+	w := NewWorker(store, fakeSettings{}, &scriptAnalyzer{}, NewBroker(), WorkerConfig{})
 	if w.processNext(context.Background()) {
 		t.Fatal("claimed a job while AI is not configured")
 	}
@@ -304,7 +304,7 @@ func TestWorkerShutdownMarksInterrupted(t *testing.T) {
 			return ctx.Err()
 		},
 	}}
-	w := NewWorker(store, fakeSettings{configured()}, ai, WorkerConfig{Timeout: time.Minute})
+	w := NewWorker(store, fakeSettings{configured()}, ai, NewBroker(), WorkerConfig{Timeout: time.Minute})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { w.Run(ctx); close(done) }()
@@ -401,7 +401,7 @@ func TestTrigger(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			jobs := &fakeJobs{job: queuedJob(), created: tt.created}
 			waker := &countWaker{}
-			h := NewHandler(jobs, fakeLeads{l}, fakeSettings{tt.settings}, waker)
+			h := NewHandler(jobs, fakeLeads{l}, fakeSettings{tt.settings}, waker, NewBroker())
 			rec := httptest.NewRecorder()
 			newRouter(h).ServeHTTP(rec, httptest.NewRequest("POST", "/api/leads/"+tt.leadID.String()+"/analyses", nil))
 
@@ -437,7 +437,7 @@ func TestResponsesMatchSpec(t *testing.T) {
 
 	for name, job := range map[string]Job{"queued": queuedJob(), "succeeded": succeededJob(l.ID), "failed": failed} {
 		t.Run(name, func(t *testing.T) {
-			h := NewHandler(&fakeJobs{job: job}, fakeLeads{l}, fakeSettings{configured()}, &countWaker{})
+			h := NewHandler(&fakeJobs{job: job}, fakeLeads{l}, fakeSettings{configured()}, &countWaker{}, NewBroker())
 			for _, tc := range []struct{ method, url, specPath string }{
 				{"GET", "/api/analyses/" + job.ID.String(), "/analyses/{id}"},
 				{"GET", "/api/analyses/" + uuid.NewString(), "/analyses/{id}"},

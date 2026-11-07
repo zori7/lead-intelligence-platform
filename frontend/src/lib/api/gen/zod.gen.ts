@@ -166,6 +166,16 @@ export const zAnalysisError = z.object({
     retryable: z.boolean()
 });
 
+/**
+ * `data` of a `progress` event on the analysis event stream.
+ */
+export const zAnalysisProgressEvent = z.object({
+    step: zStepName,
+    state: zStepState,
+    progress: z.int().gte(0).lte(100),
+    message: z.string().optional()
+});
+
 export const zCompanyInsights = z.object({
     name: z.string(),
     industry: z.string(),
@@ -393,6 +403,15 @@ export const zGetAnalysisPath = z.object({
  * The job.
  */
 export const zGetAnalysisResponse = zAnalysisJob;
+
+export const zStreamAnalysisEventsPath = z.object({
+    id: z.uuid()
+});
+
+/**
+ * An event stream (see the operation description for event types).
+ */
+export const zStreamAnalysisEventsResponse = z.string();
 
 /**
  * Application status.

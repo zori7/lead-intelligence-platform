@@ -108,7 +108,7 @@ func TestStoreOneActiveJobPerLead(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("claim: %v %v", ok, err)
 	}
-	if _, err := s.Fail(ctx, job.ID, job.Steps, JobError{Code: "internal", Message: "x", Retryable: true}); err != nil {
+	if _, _, err := s.Fail(ctx, job.ID, job.Steps, JobError{Code: "internal", Message: "x", Retryable: true}); err != nil {
 		t.Fatal(err)
 	}
 	if _, c, err := s.Create(ctx, l.ID, LeadInput{CompanyName: "Acme"}); err != nil || !c {
@@ -159,8 +159,12 @@ func TestStoreLifecycle(t *testing.T) {
 	if ok, err := s.UpdateProgress(ctx, job.ID, steps, 12); err != nil || !ok {
 		t.Fatalf("progress: %v %v", ok, err)
 	}
-	if ok, err := s.Complete(ctx, job.ID, steps, *sampleResult()); err != nil || !ok {
+	done, ok, err := s.Complete(ctx, job.ID, steps, *sampleResult())
+	if err != nil || !ok {
 		t.Fatalf("complete: %v %v", ok, err)
+	}
+	if done.Status != api.JobSucceeded || done.Result == nil || done.LeadID != l.ID {
+		t.Fatalf("returned job: %+v", done)
 	}
 
 	got, err := s.Get(ctx, job.ID)
@@ -179,13 +183,13 @@ func TestStoreLifecycle(t *testing.T) {
 	}
 
 	// Terminal states are final: first writer wins.
-	if ok, _ := s.Fail(ctx, job.ID, steps, JobError{Code: "timeout"}); ok {
+	if _, ok, _ := s.Fail(ctx, job.ID, steps, JobError{Code: "timeout"}); ok {
 		t.Fatal("failed a succeeded job")
 	}
 	if ok, _ := s.UpdateProgress(ctx, job.ID, steps, 50); ok {
 		t.Fatal("updated progress of a finished job")
 	}
-	if ok, _ := s.Complete(ctx, job.ID, steps, *sampleResult()); ok {
+	if _, ok, _ := s.Complete(ctx, job.ID, steps, *sampleResult()); ok {
 		t.Fatal("completed a job twice")
 	}
 
@@ -203,10 +207,10 @@ func TestStoreFailRecordsError(t *testing.T) {
 	ctx := context.Background()
 	l := createLead(t, pool)
 	queued, _, _ := s.Create(ctx, l.ID, LeadInput{CompanyName: "Acme"})
-	if ok, err := s.Fail(ctx, queued.ID, queued.Steps, JobError{Code: "ai_unavailable", Message: "Retry.", Retryable: true}); err != nil || !ok {
+	got, ok, err := s.Fail(ctx, queued.ID, queued.Steps, JobError{Code: "ai_unavailable", Message: "Retry.", Retryable: true})
+	if err != nil || !ok {
 		t.Fatalf("fail queued: %v %v", ok, err)
 	}
-	got, _ := s.Get(ctx, queued.ID)
 	if got.Status != api.JobFailed || got.Error == nil || got.Error.Code != "ai_unavailable" || !got.Error.Retryable {
 		t.Fatalf("failed job: %+v", got)
 	}

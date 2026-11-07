@@ -1,4 +1,4 @@
-"""Record real company homepages as local test fixtures (SPEC.md §9.7, D12).
+"""Record real company homepages as local test fixtures (SPEC.md §9.7).
 
 Fetches each URL once with the production fetcher's rules (address guard,
 manual redirects, size cap) and writes
