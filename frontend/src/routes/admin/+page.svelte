@@ -29,6 +29,6 @@
 			<Button variant="outline" onclick={() => settings.refetch()}>Try again</Button>
 		</div>
 	{:else}
-		<Skeleton class="h-96 w-full rounded-2xl bg-white/[0.05]" />
+		<Skeleton class="h-96 w-full rounded-2xl" />
 	{/if}
 </div>

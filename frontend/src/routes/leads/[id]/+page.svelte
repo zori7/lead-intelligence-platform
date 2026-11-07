@@ -55,8 +55,8 @@
 	<Button href="/" variant="ghost" size="sm" class="w-fit"><ArrowLeftIcon /> All leads</Button>
 
 	{#if detail.isPending}
-		<Skeleton class="h-24 w-full rounded-2xl bg-white/[0.05]" />
-		<Skeleton class="h-48 w-full rounded-2xl bg-white/[0.05]" />
+		<Skeleton class="h-24 w-full rounded-2xl" />
+		<Skeleton class="h-48 w-full rounded-2xl" />
 	{:else if notFound}
 		<div class="flex flex-col items-center gap-3 py-16 text-center">
 			<p class="text-lg font-medium">Lead not found</p>
@@ -82,7 +82,7 @@
 								href={lead.website}
 								target="_blank"
 								rel="noopener noreferrer"
-								class="text-sm text-sky-300/80 hover:text-sky-200 hover:underline">{lead.website}</a
+								class="text-sm text-info hover:underline">{lead.website}</a
 							>
 						{/if}
 					</div>

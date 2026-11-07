@@ -701,3 +701,6 @@ func (s singleLead) Update(context.Context, uuid.UUID, []lead.Change) (lead.Lead
 	return s.l, nil
 }
 func (s singleLead) Delete(context.Context, uuid.UUID) error { return nil }
+func (s singleLead) Stats(context.Context) (api.LeadStats, error) {
+	return api.LeadStats{Total: 1}, nil
+}

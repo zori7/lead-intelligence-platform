@@ -8,6 +8,7 @@ import type {
 	LeadCreate,
 	LeadList,
 	LeadPatch,
+	LeadStats,
 	LlmSettings,
 	LlmSettingsUpdate,
 	ModelList
@@ -79,6 +80,7 @@ function listQuery(f: LeadFilters): string {
 
 export const api = {
 	listLeads: (filters: LeadFilters) => request<LeadList>('GET', `/api/leads?${listQuery(filters)}`),
+	getLeadStats: () => request<LeadStats>('GET', '/api/leads/stats'),
 	getLead: (id: string) => request<LeadDetail>('GET', `/api/leads/${encodeURIComponent(id)}`),
 	createLead: (input: LeadCreate) => request<Lead>('POST', '/api/leads', input),
 	updateLead: (id: string, patch: LeadPatch) =>

@@ -1,4 +1,11 @@
-import type { JobStatus, Priority, StepName, Tier, WebsiteFetch } from '#lib/api/types.js';
+import type {
+	JobStatus,
+	Priority,
+	StepName,
+	StepState,
+	Tier,
+	WebsiteFetch
+} from '#lib/api/types.js';
 
 export const stepLabel: Record<StepName, string> = {
 	validate_input: 'Validate input',
@@ -9,6 +16,14 @@ export const stepLabel: Record<StepName, string> = {
 	score_lead: 'Score lead',
 	generate_recommendations: 'Generate recommendations',
 	aggregate: 'Assemble result'
+};
+
+export const stepStateLabel: Record<StepState, string> = {
+	pending: 'pending',
+	running: 'running',
+	done: 'done',
+	failed: 'failed',
+	skipped: 'skipped'
 };
 
 export const jobStatusLabel: Record<JobStatus, string> = {
@@ -23,28 +38,33 @@ export const tierLabel: Record<Tier, string> = { hot: 'Hot', warm: 'Warm', cold:
 
 // Full class strings (not interpolated) so Tailwind can see them.
 // Tier colors: hot = rose, warm = amber, cold = slate-blue (SPEC.md §10.5).
-export const tierTone: Record<Tier, { text: string; stroke: string; pill: string }> = {
+// The colours are theme tokens defined in routes/layout.css.
+export const tierTone: Record<Tier, { text: string; stroke: string; pill: string; dot: string }> = {
 	hot: {
-		text: 'text-rose-300',
-		stroke: 'stroke-rose-400',
-		pill: 'bg-rose-400/10 text-rose-200 ring-rose-300/25'
+		text: 'text-tier-hot',
+		stroke: 'stroke-tier-hot',
+		pill: 'bg-tier-hot/10 text-tier-hot ring-tier-hot/25',
+		dot: 'bg-tier-hot'
 	},
 	warm: {
-		text: 'text-amber-300',
-		stroke: 'stroke-amber-400',
-		pill: 'bg-amber-400/10 text-amber-200 ring-amber-300/25'
+		text: 'text-tier-warm',
+		stroke: 'stroke-tier-warm',
+		pill: 'bg-tier-warm/10 text-tier-warm ring-tier-warm/25',
+		dot: 'bg-tier-warm'
 	},
 	cold: {
-		text: 'text-slate-300',
-		stroke: 'stroke-slate-400',
-		pill: 'bg-slate-400/10 text-slate-200 ring-slate-300/25'
+		text: 'text-tier-cold',
+		stroke: 'stroke-tier-cold',
+		pill: 'bg-tier-cold/10 text-tier-cold ring-tier-cold/25',
+		dot: 'bg-tier-cold'
 	}
 };
 
+// Priorities reuse the tier hues: high = rose, medium = amber, low = slate-blue.
 export const priorityTone: Record<Priority, string> = {
-	high: 'bg-rose-400/10 text-rose-200 ring-rose-300/25',
-	medium: 'bg-amber-400/10 text-amber-200 ring-amber-300/25',
-	low: 'bg-slate-400/10 text-slate-200 ring-slate-300/25'
+	high: tierTone.hot.pill,
+	medium: tierTone.warm.pill,
+	low: tierTone.cold.pill
 };
 
 /** Where the company insights came from, shown on the insights card. */

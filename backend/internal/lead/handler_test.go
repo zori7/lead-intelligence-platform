@@ -31,6 +31,14 @@ func (f *fakeRepo) List(context.Context, ListParams) ([]Lead, int, error) {
 	return []Lead{*f.lead}, 1, nil
 }
 
+func (f *fakeRepo) Stats(context.Context) (api.LeadStats, error) {
+	var st api.LeadStats
+	if f.lead != nil {
+		st.Total = 1
+	}
+	return st, nil
+}
+
 func (f *fakeRepo) Get(_ context.Context, id uuid.UUID) (Lead, error) {
 	if f.lead == nil || f.lead.ID != id {
 		return Lead{}, ErrNotFound

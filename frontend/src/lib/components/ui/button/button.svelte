@@ -9,7 +9,7 @@
 			variant: {
 				default: 'btn-glow',
 				outline:
-					'border-white/10 bg-white/[0.04] backdrop-blur-md hover:bg-white/[0.09] hover:text-foreground aria-expanded:bg-white/[0.09] aria-expanded:text-foreground shadow-[inset_0_1px_0_0_oklch(1_0_0/0.08)]',
+					'border-border bg-foreground/[0.03] backdrop-blur-md hover:bg-foreground/[0.07] hover:text-foreground aria-expanded:bg-foreground/[0.07] aria-expanded:text-foreground shadow-[inset_0_1px_0_0_var(--highlight)]',
 				secondary:
 					'bg-secondary text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)] aria-expanded:bg-secondary aria-expanded:text-secondary-foreground',
 				ghost:

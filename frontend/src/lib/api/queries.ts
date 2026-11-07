@@ -16,6 +16,8 @@ import type {
 export const keys = {
 	leads: ['leads'] as const,
 	leadList: (filters: LeadFilters) => ['leads', filters] as const,
+	// Under ['leads'], so every lead mutation and finished analysis refreshes it too.
+	leadStats: ['leads', 'stats'] as const,
 	lead: (id: string) => ['lead', id] as const,
 	analyses: (leadId: string) => ['analyses', leadId] as const,
 	analysis: (jobId: string) => ['analysis', jobId] as const,
@@ -37,6 +39,9 @@ export const leadsQuery = (filters: LeadFilters) =>
 		// Keep the current rows on screen while a new filter/page loads.
 		placeholderData: keepPreviousData
 	});
+
+export const leadStatsQuery = () =>
+	queryOptions({ queryKey: keys.leadStats, queryFn: () => api.getLeadStats() });
 
 export const leadQuery = (id: string) =>
 	queryOptions({

@@ -17,6 +17,7 @@
 	import { subscribeToAnalysis } from '#lib/api/live-analysis.js';
 	import { isActiveJob, type AnalysisJob } from '#lib/api/types.js';
 	import { formatDateTime } from '#lib/components/leads/labels.js';
+	import { staggerChildren } from '#lib/motion/attachments.js';
 	import AnalysisProgress from './AnalysisProgress.svelte';
 	import AnalysisHistory from './AnalysisHistory.svelte';
 	import CompanyInsights from './CompanyInsights.svelte';
@@ -88,7 +89,7 @@
 					Viewing the analysis from {formatDateTime(current.created_at)} ·
 					<button
 						type="button"
-						class="text-sky-300 hover:underline"
+						class="text-info hover:underline"
 						onclick={() => (selectedId = null)}>back to latest</button
 					>
 				</p>
@@ -101,8 +102,7 @@
 
 	{#if !aiConfigured}
 		<p class="text-sm text-muted-foreground">
-			AI not configured — ask an admin (<a href="/admin" class="text-sky-300 hover:underline"
-				>/admin</a
+			AI not configured — ask an admin (<a href="/admin" class="text-info hover:underline">/admin</a
 			>).
 		</p>
 	{/if}
@@ -124,7 +124,7 @@
 				{#if job.isError}
 					<p class="text-muted-foreground">Could not load the analysis: {job.error.message}</p>
 				{:else}
-					<Skeleton class="h-64 w-full rounded-2xl bg-white/[0.05]" />
+					<Skeleton class="h-64 w-full rounded-2xl" />
 				{/if}
 			{:else if isActiveJob(current.status)}
 				<Card.Root class="glow-edge">
@@ -158,7 +158,7 @@
 							{#if current.status === 'cancelled'}
 								<CircleStopIcon class="mt-0.5 size-5 shrink-0 text-muted-foreground" />
 							{:else}
-								<TriangleAlertIcon class="mt-0.5 size-5 shrink-0 text-rose-300" />
+								<TriangleAlertIcon class="mt-0.5 size-5 shrink-0 text-destructive" />
 							{/if}
 							<div class="flex flex-1 flex-col gap-1">
 								<p class="font-medium">
@@ -170,7 +170,7 @@
 										<p class="text-sm text-muted-foreground">
 											An admin can change the models in <a
 												href="/admin"
-												class="text-sky-300 hover:underline">model settings</a
+												class="text-info hover:underline">model settings</a
 											>.
 										</p>
 									{/if}
@@ -191,50 +191,58 @@
 				</Card.Root>
 			{:else if current.result}
 				{@const result = current.result}
-				<Card.Root class="glow-edge">
-					<Card.Content class="flex flex-col items-center gap-6 sm:flex-row sm:items-center">
-						<ScoreRing value={result.score.value} tier={result.score.tier} />
-						<div class="flex flex-col gap-2">
-							<p class="leading-relaxed">{result.summary}</p>
-							<p class="text-sm text-muted-foreground">
-								Confidence {percent(result.score.confidence)} · analyzed {formatDateTime(
-									current.finished_at
-								)}
-							</p>
-						</div>
-					</Card.Content>
-				</Card.Root>
-
-				{#if result.meta.partial}
+				<!-- Keyed on the job, so picking another analysis from the history replays the
+				     reveal: ring and count-up first, then the result cards stagger in. -->
+				{#key current.id}
+					<Card.Root class="glow-edge">
+						<Card.Content class="flex flex-col items-center gap-6 sm:flex-row sm:items-center">
+							<ScoreRing value={result.score.value} tier={result.score.tier} />
+							<div class="flex flex-col gap-2">
+								<p class="leading-relaxed">{result.summary}</p>
+								<p class="text-sm text-muted-foreground">
+									Confidence {percent(result.score.confidence)} · analyzed {formatDateTime(
+										current.finished_at
+									)}
+								</p>
+							</div>
+						</Card.Content>
+					</Card.Root>
 					<div
-						class="flex items-start gap-3 rounded-2xl bg-amber-400/[0.08] px-4 py-3 ring-1 ring-amber-300/20 ring-inset"
-						role="status"
+						class="flex flex-col gap-4"
+						{@attach staggerChildren({ delay: 0.45, stagger: 0.07 })}
 					>
-						<TriangleAlertIcon class="mt-0.5 size-4 shrink-0 text-amber-300" />
-						<div>
-							<p class="font-medium">Partial result</p>
-							<p class="text-sm text-muted-foreground">
-								{result.meta.warnings.join(' ') ||
-									'Part of the analysis failed; the score uses what is available.'}
-							</p>
-						</div>
+						{#if result.meta.partial}
+							<div
+								class="flex items-start gap-3 rounded-2xl bg-warning/[0.08] px-4 py-3 ring-1 ring-warning/20 ring-inset"
+								role="status"
+							>
+								<TriangleAlertIcon class="mt-0.5 size-4 shrink-0 text-warning" />
+								<div>
+									<p class="font-medium">Partial result</p>
+									<p class="text-sm text-muted-foreground">
+										{result.meta.warnings.join(' ') ||
+											'Part of the analysis failed; the score uses what is available.'}
+									</p>
+								</div>
+							</div>
+						{/if}
+
+						<CompanyInsights company={result.company} website={result.meta.website} />
+						<ScoreBreakdown fit={result.fit} intent={result.intent} />
+						<RecommendationList recommendations={result.recommendations} />
+
+						<p class="text-xs text-muted-foreground">
+							Models:
+							{#each Object.entries(result.meta.node_models) as [node, model], i (node)}
+								{i > 0 ? ' · ' : ''}{node in stepLabel
+									? stepLabel[node as keyof typeof stepLabel]
+									: node}:
+								<span class="text-foreground/80">{model}</span>
+							{/each}
+							· {(result.meta.duration_ms / 1000).toFixed(1)}s
+						</p>
 					</div>
-				{/if}
-
-				<CompanyInsights company={result.company} website={result.meta.website} />
-				<ScoreBreakdown fit={result.fit} intent={result.intent} />
-				<RecommendationList recommendations={result.recommendations} />
-
-				<p class="text-xs text-muted-foreground">
-					Models:
-					{#each Object.entries(result.meta.node_models) as [node, model], i (node)}
-						{i > 0 ? ' · ' : ''}{node in stepLabel
-							? stepLabel[node as keyof typeof stepLabel]
-							: node}:
-						<span class="text-foreground/80">{model}</span>
-					{/each}
-					· {(result.meta.duration_ms / 1000).toFixed(1)}s
-				</p>
+				{/key}
 			{/if}
 		</div>
 

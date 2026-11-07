@@ -101,6 +101,16 @@ export const zLeadList = z.object({
     total: z.int()
 });
 
+export const zLeadStats = z.object({
+    total: z.int(),
+    analyzed: z.int(),
+    by_tier: z.object({
+        hot: z.int(),
+        warm: z.int(),
+        cold: z.int()
+    })
+});
+
 export const zJobStatus = z.enum([
     'queued',
     'running',
@@ -343,6 +353,11 @@ export const zCreateLeadBody = zLeadCreate;
  * The created lead.
  */
 export const zCreateLeadResponse = zLead;
+
+/**
+ * Lead counts.
+ */
+export const zGetLeadStatsResponse = zLeadStats;
 
 export const zDeleteLeadPath = z.object({
     id: z.uuid()

@@ -15,7 +15,7 @@
 		<Card.Title class="text-base">Company insights</Card.Title>
 		<Card.Description class="flex flex-wrap items-center gap-1.5">
 			{#if website.status === 'fetched'}
-				<GlobeIcon class="size-3.5 text-sky-300" />
+				<GlobeIcon class="size-3.5 text-info" />
 			{:else}
 				<SparklesIcon class="size-3.5" />
 			{/if}
@@ -40,7 +40,7 @@
 				<ul class="flex flex-wrap gap-2">
 					{#each company.key_needs as need (need)}
 						<li
-							class="rounded-full bg-white/[0.05] px-3 py-1 text-xs ring-1 ring-white/[0.08] ring-inset"
+							class="rounded-full bg-foreground/[0.05] px-3 py-1 text-xs ring-1 ring-foreground/[0.08] ring-inset"
 						>
 							{need}
 						</li>

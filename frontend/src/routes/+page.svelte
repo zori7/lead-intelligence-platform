@@ -9,6 +9,7 @@
 	import LeadFilters from '#lib/components/leads/LeadFilters.svelte';
 	import LeadTable from '#lib/components/leads/LeadTable.svelte';
 	import LeadForm from '#lib/components/leads/LeadForm.svelte';
+	import KpiStrip from '#lib/components/leads/KpiStrip.svelte';
 	import { configQuery, leadsQuery } from '#lib/api/queries.js';
 	import {
 		LEAD_SORTS,
@@ -79,23 +80,25 @@
 				{/if}
 			</p>
 		</div>
-		<Button class="h-10 rounded-xl px-5" onclick={() => (formOpen = true)}>
+		<Button class="btn-glow h-10 rounded-xl px-5" onclick={() => (formOpen = true)}>
 			<PlusIcon /> Add lead
 		</Button>
 	</div>
 
+	<KpiStrip />
+
 	{#if config.data?.ai_configured === false}
 		<div
-			class="flex items-start gap-3 rounded-2xl bg-sky-400/[0.08] px-4 py-3 ring-1 ring-sky-300/20 ring-inset"
+			class="flex items-start gap-3 rounded-2xl bg-info/[0.08] px-4 py-3 ring-1 ring-info/20 ring-inset"
 			role="status"
 		>
-			<InfoIcon class="mt-0.5 size-4 shrink-0 text-sky-300" />
+			<InfoIcon class="mt-0.5 size-4 shrink-0 text-info" />
 			<p class="text-sm">
 				<span class="font-medium">AI not configured.</span>
 				<span class="text-muted-foreground">
 					Leads can be managed, but analysis is disabled until an admin chooses a default model (<a
 						href="/admin"
-						class="text-sky-300 hover:underline">/admin</a
+						class="text-info hover:underline">/admin</a
 					>).
 				</span>
 			</p>
@@ -121,7 +124,7 @@
 
 		{#if total > 0}
 			<div
-				class="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.06] px-5 py-3.5 text-sm"
+				class="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-3.5 text-sm"
 			>
 				<span class="text-muted-foreground">
 					Showing {filters.offset + 1}–{Math.min(filters.offset + PAGE_SIZE, total)} of {total}

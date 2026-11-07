@@ -13,6 +13,7 @@ import (
 // Repository is the persistence the handler depends on (implemented by *Store).
 type Repository interface {
 	List(ctx context.Context, p ListParams) ([]Lead, int, error)
+	Stats(ctx context.Context) (api.LeadStats, error)
 	Get(ctx context.Context, id uuid.UUID) (Lead, error)
 	Create(ctx context.Context, f Fields) (Lead, error)
 	Update(ctx context.Context, id uuid.UUID, changes []Change) (Lead, error)
@@ -73,6 +74,15 @@ func (h *Handler) ListLeads(w http.ResponseWriter, r *http.Request, params api.L
 		leads = []Lead{}
 	}
 	httpx.WriteJSON(w, http.StatusOK, listResponse{Items: leads, Total: total})
+}
+
+func (h *Handler) GetLeadStats(w http.ResponseWriter, r *http.Request) {
+	stats, err := h.repo.Stats(r.Context())
+	if err != nil {
+		httpx.WriteError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, stats)
 }
 
 func (h *Handler) CreateLead(w http.ResponseWriter, r *http.Request) {

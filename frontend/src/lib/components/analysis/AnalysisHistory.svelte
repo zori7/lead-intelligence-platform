@@ -16,11 +16,11 @@
 	const history = createQuery(() => analysesQuery(leadId));
 </script>
 
-<Card.Root size="sm">
+<Card.Root size="sm" class="self-start">
 	<Card.Header><Card.Title class="text-base">History</Card.Title></Card.Header>
 	<Card.Content>
 		{#if history.isPending}
-			<Skeleton class="h-24 w-full bg-white/[0.05]" />
+			<Skeleton class="h-24 w-full" />
 		{:else if history.isError}
 			<p class="text-muted-foreground">Could not load history.</p>
 		{:else if history.data.items.length === 0}
@@ -31,8 +31,8 @@
 					<li>
 						<button
 							type="button"
-							class="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-white/[0.05]
-							{job.id === selectedId ? 'bg-white/[0.07] ring-1 ring-white/[0.1] ring-inset' : ''}"
+							class="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-foreground/[0.05]
+							{job.id === selectedId ? 'bg-foreground/[0.07] ring-1 ring-foreground/10 ring-inset' : ''}"
 							aria-current={job.id === selectedId ? 'true' : undefined}
 							onclick={() => onselect(job)}
 						>

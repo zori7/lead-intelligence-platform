@@ -27,6 +27,7 @@ export type {
 	LeadDetail,
 	LeadList,
 	LeadPatch,
+	LeadStats,
 	LeadSort,
 	LeadStatus,
 	LlmDefaultSetting,

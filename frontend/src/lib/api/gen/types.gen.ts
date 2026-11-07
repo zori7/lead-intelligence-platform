@@ -89,6 +89,22 @@ export type LeadList = {
     total: number;
 };
 
+export type LeadStats = {
+    /**
+     * All leads.
+     */
+    total: number;
+    /**
+     * Leads with a score from a successful analysis.
+     */
+    analyzed: number;
+    by_tier: {
+        hot: number;
+        warm: number;
+        cold: number;
+    };
+};
+
 export type LeadDetail = {
     lead: Lead;
     /**
@@ -407,6 +423,22 @@ export type CreateLeadResponses = {
 };
 
 export type CreateLeadResponse = CreateLeadResponses[keyof CreateLeadResponses];
+
+export type GetLeadStatsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/leads/stats';
+};
+
+export type GetLeadStatsResponses = {
+    /**
+     * Lead counts.
+     */
+    200: LeadStats;
+};
+
+export type GetLeadStatsResponse = GetLeadStatsResponses[keyof GetLeadStatsResponses];
 
 export type DeleteLeadData = {
     body?: never;

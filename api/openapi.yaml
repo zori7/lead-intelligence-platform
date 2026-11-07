@@ -67,6 +67,19 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
 
+  /leads/stats:
+    get:
+      operationId: getLeadStats
+      summary: Pipeline totals for the KPI strip
+      description: Counts over all leads, independent of list filters and pagination.
+      tags: [leads]
+      responses:
+        '200':
+          description: Lead counts.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LeadStats' }
+
   /leads/{id}:
     parameters:
       - name: id
@@ -487,6 +500,26 @@ components:
         total:
           type: integer
           description: Total matching leads, ignoring limit/offset.
+
+    LeadStats:
+      type: object
+      additionalProperties: false
+      required: [total, analyzed, by_tier]
+      properties:
+        total:
+          type: integer
+          description: All leads.
+        analyzed:
+          type: integer
+          description: Leads with a score from a successful analysis.
+        by_tier:
+          type: object
+          additionalProperties: false
+          required: [hot, warm, cold]
+          properties:
+            hot: { type: integer }
+            warm: { type: integer }
+            cold: { type: integer }
 
     LeadDetail:
       type: object

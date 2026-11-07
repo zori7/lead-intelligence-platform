@@ -4,10 +4,18 @@
 	import CircleMinusIcon from '@lucide/svelte/icons/circle-minus';
 	import CircleXIcon from '@lucide/svelte/icons/circle-x';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
-	import type { AnalysisStep, StepName } from '#lib/api/types.js';
-	import { stepLabel } from './labels.js';
+	import type { AnalysisStep, StepName, StepState } from '#lib/api/types.js';
+	import { popIn } from '#lib/motion/attachments.js';
+	import { stepLabel, stepStateLabel } from './labels.js';
 
 	let { steps, progress }: { steps: AnalysisStep[]; progress: number } = $props();
+
+	const finished = new Set<StepState>(['done', 'skipped']);
+
+	// Icons present on first render (e.g. a snapshot after a reload) appear as they
+	// are; only icons that replace another later, as a step changes state, pop in.
+	const mountedAt = performance.now();
+	const iconIn = () => (performance.now() - mountedAt > 100 ? popIn() : undefined);
 
 	// fit and intent run in parallel, so they share a row.
 	const parallel: StepName[] = ['analyze_fit', 'analyze_intent'];
@@ -27,7 +35,7 @@
 
 <div class="flex flex-col gap-4">
 	<div
-		class="h-1.5 overflow-hidden rounded-full bg-white/[0.07]"
+		class="h-1.5 overflow-hidden rounded-full bg-foreground/[0.07]"
 		role="progressbar"
 		aria-label="Analysis progress"
 		aria-valuemin={0}
@@ -35,43 +43,60 @@
 		aria-valuenow={progress}
 	>
 		<div
-			class="h-full rounded-full bg-gradient-to-r from-indigo-500 via-blue-500 to-sky-300 transition-[width] duration-300"
+			class="score-gradient h-full rounded-full transition-[width] duration-300"
 			style:width="{Math.max(0, Math.min(100, progress))}%"
 		></div>
 	</div>
 
-	<ol class="flex flex-col gap-2">
-		{#each rows as row (row[0].name)}
-			<li class="grid gap-2 {row.length > 1 ? 'sm:grid-cols-2' : ''}">
-				{#each row as step (step.name)}
-					<div
-						class="flex items-center gap-2.5 rounded-xl px-3 py-2 ring-1 ring-white/[0.06] ring-inset
-						{step.state === 'running' ? 'bg-sky-400/[0.08]' : 'bg-white/[0.02]'}"
-						data-state={step.state}
-					>
-						{#if step.state === 'done'}
-							<CircleCheckIcon class="size-4 text-emerald-300" />
-						{:else if step.state === 'running'}
-							<LoaderCircleIcon class="size-4 animate-spin text-sky-300" />
-						{:else if step.state === 'failed'}
-							<CircleXIcon class="size-4 text-rose-300" />
-						{:else if step.state === 'skipped'}
-							<CircleMinusIcon class="size-4 text-muted-foreground" />
-						{:else}
-							<CircleIcon class="size-4 text-muted-foreground/60" />
-						{/if}
-						<span
-							class={step.state === 'pending' || step.state === 'skipped'
-								? 'text-muted-foreground'
-								: ''}
+	<ol class="flex flex-col">
+		{#each rows as row, r (row[0].name)}
+			<li>
+				<div class="grid gap-2 {row.length > 1 ? 'sm:grid-cols-2' : ''}">
+					{#each row as step (step.name)}
+						<div
+							class="flex items-center gap-2.5 rounded-xl px-3 py-2 ring-1 ring-foreground/[0.06] transition-colors duration-300 ring-inset
+							{step.state === 'running' ? 'bg-info/[0.08]' : 'bg-foreground/[0.02]'}"
+							data-state={step.state}
 						>
-							{stepLabel[step.name]}
-						</span>
-						{#if step.state === 'skipped'}
-							<span class="ml-auto text-xs text-muted-foreground">skipped</span>
-						{/if}
+							<!-- Each state renders its own icon, so a state change mounts a new one. -->
+							{#if step.state === 'done'}
+								<CircleCheckIcon class="size-4 shrink-0 text-success" {@attach iconIn()} />
+							{:else if step.state === 'running'}
+								<LoaderCircleIcon class="size-4 shrink-0 animate-spin text-info" />
+							{:else if step.state === 'failed'}
+								<CircleXIcon class="size-4 shrink-0 text-destructive" {@attach iconIn()} />
+							{:else if step.state === 'skipped'}
+								<CircleMinusIcon class="size-4 shrink-0 text-muted-foreground" {@attach iconIn()} />
+							{:else}
+								<CircleIcon class="size-4 shrink-0 text-muted-foreground/60" />
+							{/if}
+							<span
+								class={step.state === 'pending' || step.state === 'skipped'
+									? 'text-muted-foreground'
+									: ''}
+							>
+								{stepLabel[step.name]}
+								<span class="sr-only">: {stepStateLabel[step.state]}</span>
+							</span>
+							{#if step.state === 'skipped'}
+								<span class="ml-auto text-xs text-muted-foreground" aria-hidden="true">skipped</span
+								>
+							{/if}
+						</div>
+					{/each}
+				</div>
+				{#if r < rows.length - 1}
+					<!-- Connector to the next row; it fills once every step in this row has finished. -->
+					<div
+						class="relative ml-[19px] h-2.5 w-0.5 overflow-hidden bg-foreground/10"
+						aria-hidden="true"
+					>
+						<div
+							class="absolute inset-0 origin-top bg-success transition-transform duration-[400ms] ease-out
+							{row.every((s) => finished.has(s.state)) ? 'scale-y-100' : 'scale-y-0'}"
+						></div>
 					</div>
-				{/each}
+				{/if}
 			</li>
 		{/each}
 	</ol>

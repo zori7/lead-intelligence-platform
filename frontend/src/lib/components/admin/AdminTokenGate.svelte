@@ -37,9 +37,9 @@
 	<Card.Root class="glow-edge w-full max-w-sm">
 		<Card.Header>
 			<div
-				class="mb-2 grid size-10 place-items-center rounded-xl bg-white/[0.06] ring-1 ring-white/10"
+				class="mb-2 grid size-10 place-items-center rounded-xl bg-foreground/[0.06] ring-1 ring-foreground/10"
 			>
-				<LockKeyholeIcon class="size-5 text-sky-300" />
+				<LockKeyholeIcon class="size-5 text-info" />
 			</div>
 			<Card.Title>Superadmin access</Card.Title>
 			<Card.Description>Enter the admin token configured on the server.</Card.Description>

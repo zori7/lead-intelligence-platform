@@ -69,6 +69,23 @@ func (s *Store) List(ctx context.Context, p ListParams) ([]Lead, int, error) {
 	return leads, total, nil
 }
 
+// Stats counts all leads in one pass. A lead counts as analyzed once a
+// successful analysis has written its score and tier.
+func (s *Store) Stats(ctx context.Context) (api.LeadStats, error) {
+	var st api.LeadStats
+	err := s.db.QueryRow(ctx, `
+		SELECT count(*),
+		       count(*) FILTER (WHERE ai_score IS NOT NULL),
+		       count(*) FILTER (WHERE ai_tier = 'hot'),
+		       count(*) FILTER (WHERE ai_tier = 'warm'),
+		       count(*) FILTER (WHERE ai_tier = 'cold')
+		FROM leads`).Scan(&st.Total, &st.Analyzed, &st.ByTier.Hot, &st.ByTier.Warm, &st.ByTier.Cold)
+	if err != nil {
+		return api.LeadStats{}, fmt.Errorf("lead stats: %w", err)
+	}
+	return st, nil
+}
+
 func (s *Store) Get(ctx context.Context, id uuid.UUID) (Lead, error) {
 	rows, _ := s.db.Query(ctx, "SELECT "+columns+" FROM leads WHERE id = $1", id)
 	return collectOne(rows, "get lead")

@@ -37,6 +37,7 @@ func TestResponsesMatchSpec(t *testing.T) {
 		{"create", "POST", "/api/leads", `{"company_name":"Acme"}`, "/leads"},
 		{"create invalid", "POST", "/api/leads", `{"company_name":""}`, "/leads"},
 		{"create too large", "POST", "/api/leads", `{"notes":"` + strings.Repeat("x", 70<<10) + `"}`, "/leads"},
+		{"stats", "GET", "/api/leads/stats", "", "/leads/stats"},
 		{"get", "GET", "/api/leads/" + id, "", "/leads/{id}"},
 		{"get unknown", "GET", "/api/leads/" + unknown, "", "/leads/{id}"},
 		{"patch", "PATCH", "/api/leads/" + id, `{"status":"won"}`, "/leads/{id}"},

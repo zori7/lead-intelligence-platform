@@ -52,7 +52,7 @@
 				class="rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none {status ===
 				s
 					? 'btn-glow'
-					: 'text-muted-foreground hover:bg-white/[0.06] hover:text-foreground'}"
+					: 'text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground'}"
 				onclick={() => onchange({ status: s })}>{s === null ? 'All' : statusLabel[s]}</button
 			>
 		{/each}

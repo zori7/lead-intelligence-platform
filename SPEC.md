@@ -606,6 +606,7 @@ interface LlmSettings {
 |---|---|---|---|
 | `GET` | `/api/leads` | List leads. Query: `status`, `q` (ILIKE on company/contact), `sort` (`created_desc` default, `score_desc`), `limit` (≤100, default 50), `offset` | `200 { items: Lead[], total: number }` |
 | `POST` | `/api/leads` | Create lead | `201 Lead` |
+| `GET` | `/api/leads/stats` | Pipeline totals for the KPI strip, over all leads (ignores list filters and paging) | `200 { total, analyzed, by_tier: { hot, warm, cold } }` |
 | `GET` | `/api/leads/{id}` | Get lead with its latest job | `200 { lead: Lead, latest_analysis: AnalysisJob \| null }` |
 | `PATCH` | `/api/leads/{id}` | Partial update (any subset of editable fields, including `status`) | `200 Lead` |
 | `DELETE` | `/api/leads/{id}` | Delete lead. Cancels any active job first, then cascades | `204` |
@@ -1058,7 +1059,7 @@ List filters (`status`, `q`, `sort`) live in the URL query string. They are read
 | **URL state** (filters, sort) | SvelteKit `page.url` |
 | **Local UI state** (sheet open, form draft) | Component `$state` |
 
-Query keys (`queries.ts`): `['leads', filters]`, `['lead', id]`, `['analyses', leadId]`, `['analysis', jobId]`, `['config']`, `['admin', 'llm-settings']`, `['admin', 'llm-models']`.
+Query keys (`queries.ts`): `['leads', filters]`, `['leads', 'stats']` (under `['leads']`, so every lead mutation and finished analysis refreshes it), `['lead', id]`, `['analyses', leadId]`, `['analysis', jobId]`, `['config']`, `['admin', 'llm-settings']`, `['admin', 'llm-models']`.
 
 | Mutation | Cache behavior |
 |---|---|
@@ -1095,7 +1096,7 @@ export function subscribeToAnalysis(qc: QueryClient, jobId: string): () => void 
 
 | Component | Responsibility |
 |---|---|
-| `KpiStrip` | Totals by tier and the share of leads analyzed. Derived from the leads query. |
+| `KpiStrip` | Totals by tier and the share of leads analyzed, from `GET /api/leads/stats`. The list endpoint is paginated (≤100 rows), so counting its items would be wrong for larger pipelines. |
 | `LeadTable` | shadcn `Table`. Sortable rows: company, contact, status badge, score pill, last analyzed. Click opens detail. Skeleton rows while loading. Empty state with CTA. |
 | `LeadFilters` | Status segmented control, debounced search (300ms), sort select. Synced to URL query. |
 | `LeadForm` (in shadcn `Sheet`) | Create/edit. zod validation mirrors the server rules. Server `fields` errors map onto inputs. |
@@ -1114,7 +1115,8 @@ export function subscribeToAnalysis(qc: QueryClient, jobId: string): () => void 
   - Neutral surfaces (zinc scale), one indigo accent, tier colors (hot = rose, warm = amber, cold = slate-blue).
   - Inter via Google Fonts, 8px spacing grid.
   - 12px radius on cards, 1px hairline borders, soft shadows only on raised layers.
-  - Light and dark themes via CSS variables (shadcn convention), toggled with the `.dark` class.
+  - Light and dark themes via CSS variables (shadcn convention), toggled with the `.dark` class from a TopBar button (`mode-watcher`). **Dark is the default.** `static/theme-init.js` applies the saved mode before the app renders (a file, not an inline script, so a strict CSP stays possible).
+  - Components use semantic tokens only (`bg-card`, `text-info`, `ring-tier-hot/25`, …), defined for both themes in `routes/layout.css`.
 - **Hierarchy:** page title → KPI strip → content. The score is the most prominent element on the detail page.
 - **Motion principles:** restrained and purposeful. Durations 150–450ms. `power2.out` / `expo.out` easing. No bounce, no looping decoration.
 

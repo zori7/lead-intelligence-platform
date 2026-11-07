@@ -16,7 +16,7 @@
 				{#each recommendations as rec, i (i)}
 					<li class="flex gap-3">
 						<span
-							class="grid size-6 shrink-0 place-items-center rounded-full bg-white/[0.06] text-xs font-medium tabular-nums"
+							class="grid size-6 shrink-0 place-items-center rounded-full bg-foreground/[0.06] text-xs font-medium tabular-nums"
 							>{i + 1}</span
 						>
 						<div class="flex flex-col gap-1">

@@ -62,7 +62,7 @@
 				onchange={() => onedit(`${field}.model`)}
 			/>
 			{#if stale}
-				<Badge variant="outline" class="border-amber-300/30 text-amber-200">
+				<Badge variant="outline" class="border-warning/30 text-warning">
 					<TriangleAlertIcon /> not available on server
 				</Badge>
 			{/if}

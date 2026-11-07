@@ -92,7 +92,7 @@
 
 <form novalidate onsubmit={submit}>
 	<Card.Root class="glow-edge gap-0 py-0">
-		<Card.Header class="border-b border-white/[0.06] py-5">
+		<Card.Header class="border-b border-border py-5">
 			<Card.Title class="text-base">LLM models</Card.Title>
 			<Card.Description>
 				Steps without their own model or temperature inherit the default.
@@ -115,10 +115,10 @@
 			<div class="flex flex-col gap-3 px-5 pt-5">
 				{#if !settings.configured}
 					<div
-						class="flex items-start gap-3 rounded-2xl bg-sky-400/[0.08] px-4 py-3 ring-1 ring-sky-300/20 ring-inset"
+						class="flex items-start gap-3 rounded-2xl bg-info/[0.08] px-4 py-3 ring-1 ring-info/20 ring-inset"
 						role="status"
 					>
-						<InfoIcon class="mt-0.5 size-4 shrink-0 text-sky-300" />
+						<InfoIcon class="mt-0.5 size-4 shrink-0 text-info" />
 						<div>
 							<p class="font-medium">AI is not configured yet</p>
 							<p class="text-sm text-muted-foreground">
@@ -129,10 +129,10 @@
 				{/if}
 				{#if unreachable}
 					<div
-						class="flex items-start gap-3 rounded-2xl bg-rose-400/[0.08] px-4 py-3 ring-1 ring-rose-300/20 ring-inset"
+						class="flex items-start gap-3 rounded-2xl bg-destructive/[0.08] px-4 py-3 ring-1 ring-destructive/20 ring-inset"
 						role="alert"
 					>
-						<TriangleAlertIcon class="mt-0.5 size-4 shrink-0 text-rose-300" />
+						<TriangleAlertIcon class="mt-0.5 size-4 shrink-0 text-destructive" />
 						<div>
 							<p class="font-medium">LLM server unreachable</p>
 							<p class="text-sm text-muted-foreground">
@@ -185,12 +185,10 @@
 			</Table.Body>
 		</Table.Root>
 
-		<div
-			class="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.06] px-5 py-4"
-		>
+		<div class="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-4">
 			<p class="text-sm text-muted-foreground">
 				{#if parallelMismatch}
-					<span class="text-amber-200">
+					<span class="text-warning">
 						ICP fit and buying intent run in parallel but use different models. Local servers that
 						hold one model in memory may reload it for each call.
 					</span>

@@ -142,6 +142,47 @@ func TestStoreList(t *testing.T) {
 	}
 }
 
+func TestStoreStats(t *testing.T) {
+	s, pool := newTestStore(t)
+	ctx := context.Background()
+
+	empty, err := s.Stats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty != (api.LeadStats{}) {
+		t.Fatalf("empty table: %+v", empty)
+	}
+
+	for _, name := range []string{"Hot A", "Hot B", "Warm", "Cold", "Unscored"} {
+		l := mustCreate(t, s, api.LeadCreate{CompanyName: name})
+		var tier string
+		switch name {
+		case "Hot A", "Hot B":
+			tier = "hot"
+		case "Warm":
+			tier = "warm"
+		case "Cold":
+			tier = "cold"
+		default:
+			continue
+		}
+		if _, err := pool.Exec(ctx, "UPDATE leads SET ai_score = 50, ai_tier = $1 WHERE id = $2", tier, l.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := s.Stats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := api.LeadStats{Total: 5, Analyzed: 4}
+	want.ByTier.Hot, want.ByTier.Warm, want.ByTier.Cold = 2, 1, 1
+	if got != want {
+		t.Fatalf("stats = %+v, want %+v", got, want)
+	}
+}
+
 func TestDBRejectsInvalidStatus(t *testing.T) {
 	_, pool := newTestStore(t)
 	_, err := pool.Exec(context.Background(), "INSERT INTO leads (company_name, status) VALUES ('X', 'archived')")
