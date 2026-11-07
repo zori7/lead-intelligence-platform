@@ -41,7 +41,8 @@
 - Async AI analysis jobs. Jobs are persisted, deduplicated, cancellable, and time-limited.
 - Real-time progress over SSE.
 - **Superadmin page (`/admin`)** to configure which LLM model (and temperature) each LLM workflow step uses: a global default plus optional per-step overrides. Models are picked from the list the LLM server reports. Changes take effect for the next analysis without a restart. Access is protected by an admin token.
-- A LangGraph workflow with validation, extraction, parallel analysis, deterministic scoring, recommendations, aggregation, conditional routing, and retries.
+- A LangGraph workflow with validation, a website fetch, extraction, parallel analysis, deterministic scoring, recommendations, aggregation, conditional routing, and retries.
+- **Website grounding:** when a lead has a `website`, the AI service fetches that one page (the homepage), extracts its readable text, and feeds it to the company extraction step (§9.7). Results state whether they are grounded in the website or inferred from lead data only.
 - Docker Compose setup with env-based configuration.
 
 ### Non-goals (explicitly out of scope)
@@ -50,7 +51,8 @@
 |---|---|
 | User accounts, roles, multi-tenancy | Single-user local tool for the MVP. The superadmin area is protected by a single `ADMIN_TOKEN` (§12), not by user accounts. See §12 for the upgrade path. |
 | Settings history/audit, per-step LLM endpoints or providers | One endpoint (`LLM_BASE_URL`). Only the model and temperature vary per step. |
-| External enrichment (web scraping, Clearbit, search APIs) | Adds keys, rate limits, and legal concerns. Insights are inferred from lead data plus model knowledge and are labeled "AI-inferred". |
+| Third-party enrichment (Clearbit, search APIs) and crawling beyond the lead's homepage | Adds keys, rate limits, and legal concerns. The single-page fetch of the lead's own website (§9.7) covers the main grounding need; everything else is inferred from lead data plus model knowledge and labeled "AI-inferred". |
+| JavaScript rendering (headless browser) for the website fetch | A browser engine in the AI container is a large dependency and attack surface. Pages that render only client-side yield little text, and the analysis falls back to lead data. |
 | Message broker (Kafka, RabbitMQ, Redis) | A PostgreSQL-backed job table is enough at this scale (§4.2). |
 | Multiple Go API replicas | The design allows it later (§15.7). The MVP runs one instance. |
 | Metrics/tracing stack (Prometheus, OTel) | Structured logs with correlation IDs are enough for now. |
@@ -89,6 +91,7 @@ flowchart LR
 
     DB[(PostgreSQL)]
     LLM["OpenAI-compatible LLM API"]
+    SITE["Lead's website<br/>(public internet)"]
 
     UI -- "REST (JSON)" --> PROXY
     UI -- "SSE (EventSource)" --> PROXY
@@ -100,6 +103,7 @@ flowchart LR
     GRPCC -- "AnalyzeLead (server-streaming)" --> GRPCS
     GRPCS --> GRAPH
     GRAPH -- HTTPS --> LLM
+    GRAPH -- "HTTP(S) GET, 1 page" --> SITE
     WORKERS -- publish --> BROKER
     BROKER -- subscribe --> SSE
 ```
@@ -115,6 +119,7 @@ sequenceDiagram
     participant W as Go Worker
     participant AI as Python AI (gRPC)
     participant LLM as LLM Provider
+    participant WEB as Lead website
 
     UI->>API: POST /api/leads/{id}/analyses
     API->>DB: INSERT analysis_jobs (status=queued)<br/>(partial unique index: 1 active job per lead)
@@ -124,7 +129,11 @@ sequenceDiagram
     API-->>UI: event: snapshot (current job state from DB)
     W->>DB: claim job: queued → running (FOR UPDATE SKIP LOCKED)
     W->>AI: AnalyzeLead(job_id, lead) with deadline
-    loop each workflow step
+    opt lead has a website
+        AI->>WEB: GET homepage (guarded, size- and time-limited)
+        AI-->>W: AnalysisEvent{progress: fetch_website}
+    end
+    loop each LLM workflow step
         AI->>LLM: chat completion (structured output)
         AI-->>W: AnalysisEvent{progress}
         W->>DB: UPDATE steps / progress
@@ -176,6 +185,7 @@ A **stateless workflow executor**.
 - Uses the **per-node model config carried in each request**. It has no model defaults of its own and stores no settings.
 - Lists the models available on the LLM server (`ListModels` RPC) for the admin page.
 - Owns prompts, LLM client construction (`LLM_BASE_URL`), structured output schemas, LLM-call retries, and the scoring formula.
+- Owns the **website fetch** (§9.7): the only service that makes outbound requests to lead websites. Fetched content is used within the run and never stored; only the fetch outcome is returned in `result.meta.website`.
 - Keeps only one piece of in-memory state, a set of in-flight `job_id`s, which it uses to reject duplicate execution (`ALREADY_EXISTS`).
 - Exposes the standard `grpc.health.v1` health service.
 
@@ -243,6 +253,7 @@ lead-intelligence-platform/
 │   │   ├── server.py             # AnalysisService servicer (stream mapping, dedupe, deadlines)
 │   │   ├── llm.py                # per-node ChatOpenAI resolution (cached by model+temperature) + retry wrapper; list_models()
 │   │   ├── errors.py             # error taxonomy → proto ErrorCode
+│   │   ├── web.py                # website fetch: URL/IP guard, robots.txt, limits, HTML → text (§9.7)
 │   │   ├── graph/
 │   │   │   ├── state.py          # AnalysisState TypedDict + reducers
 │   │   │   ├── schemas.py        # Pydantic structured-output models
@@ -251,8 +262,12 @@ lead-intelligence-platform/
 │   │   │   ├── scoring.py        # deterministic scoring (pure)
 │   │   │   └── builder.py        # build_graph() — StateGraph wiring + routers; models come via RunnableConfig (testable)
 │   │   └── gen/                  # generated protobuf + gRPC (committed)
+│   ├── scripts/
+│   │   └── record_websites.py    # one-off: fetch real sites once → tests/fixtures/websites/recorded/ (never run in tests/CI)
 │   └── tests/
+│       ├── fixtures/websites/    # synthetic pages (committed): <name>/{response.json,body.html}; recorded/ is git-ignored
 │       ├── test_scoring.py
+│       ├── test_web.py           # fetcher against fixtures via httpx.MockTransport: guard, limits, extraction
 │       ├── test_graph.py         # graph runs with GenericFakeChatModel (test fixture only), incl. failure paths
 │       └── test_server.py        # servicer with in-process gRPC
 │
@@ -303,7 +318,7 @@ lead-intelligence-platform/
 | Service | Runtime dependencies |
 |---|---|
 | Go | `go-chi/chi/v5`, `jackc/pgx/v5`, `google.golang.org/grpc`, `google.golang.org/protobuf`, `pressly/goose/v3`, `google/uuid`, `oapi-codegen/runtime`, `oapi-codegen/nullable`, `getkin/kin-openapi` (+ stdlib `log/slog`; tool: `oapi-codegen`) |
-| Python | `grpcio`, `grpcio-health-checking`, `protobuf`, `langgraph`, `langchain-openai`, `langchain-core`, `pydantic`, `pydantic-settings` |
+| Python | `grpcio`, `grpcio-health-checking`, `protobuf`, `langgraph`, `langchain-openai`, `langchain-core`, `pydantic`, `pydantic-settings`, `httpx` (already a transitive dependency of `openai`; listed because `web.py` uses it directly). HTML → text uses stdlib `html.parser` and robots rules use stdlib `urllib.robotparser`: no BeautifulSoup or browser engine. |
 | Frontend | `svelte`, `@sveltejs/kit`, `@sveltejs/adapter-static`, `@tanstack/svelte-query`, `tailwindcss` + `@tailwindcss/vite`, shadcn-svelte (copied components on `bits-ui`, `tailwind-variants`, `clsx`, `tailwind-merge`), `@lucide/svelte`, `svelte-sonner`, `zod`, `gsap` (dev: `vite`, `typescript`, `svelte-check`, `vitest`, `prettier-plugin-tailwindcss`, `@hey-api/openapi-ts`) |
 
 Each frontend library has a specific job:
@@ -501,8 +516,8 @@ Request limits: `http.MaxBytesReader` set to 64 KB, and unknown JSON fields reje
 type LeadStatus = 'new' | 'contacted' | 'qualified' | 'proposal' | 'won' | 'lost';
 type CompanySize = '1-10' | '11-50' | '51-200' | '201-1000' | '1000+';
 type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
-type StepName = 'validate_input' | 'extract_company' | 'analyze_fit' | 'analyze_intent'
-              | 'score_lead' | 'generate_recommendations' | 'aggregate';
+type StepName = 'validate_input' | 'fetch_website' | 'extract_company' | 'analyze_fit'
+              | 'analyze_intent' | 'score_lead' | 'generate_recommendations' | 'aggregate';
 type StepState = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
 
 interface Lead {
@@ -553,8 +568,18 @@ interface AnalysisResult {
            breakdown: { fit: number | null; intent: number | null } };
   recommendations: { action: string; rationale: string; priority: 'high' | 'medium' | 'low' }[];
   meta: { node_models: Partial<Record<LlmNode, string>>;  // model actually used per LLM node
+          website: WebsiteFetch;           // whether insights are grounded in the lead's website
           partial: boolean; warnings: string[]; duration_ms: number;
           input_tokens: number; output_tokens: number };
+}
+
+interface WebsiteFetch {
+  status: 'fetched'        // page text was given to extract_company
+        | 'not_provided'   // lead has no website
+        | 'disabled'       // WEB_FETCH_ENABLED=false
+        | 'blocked'        // robots.txt disallows, or the address is not public (§9.7)
+        | 'failed';        // network error, timeout, non-2xx, non-HTML, or no readable text
+  final_url: string | null;        // after redirects; null unless fetched
 }
 
 type LlmNode = 'extract_company' | 'analyze_fit' | 'analyze_intent' | 'generate_recommendations';
@@ -573,7 +598,7 @@ interface LlmSettings {
 }
 ```
 
-`fit` and `intent` are nullable because the workflow can **degrade gracefully** when one parallel branch fails (`meta.partial = true`).
+`fit` and `intent` are nullable because the workflow can **degrade gracefully** when one parallel branch fails (`meta.partial = true`). A website fetch that does not succeed is not a degradation (`partial` stays `false`); it is reported through `meta.website.status`.
 
 ### 7.3 Endpoints
 
@@ -725,6 +750,7 @@ enum Step {
   STEP_SCORE_LEAD = 5;
   STEP_GENERATE_RECOMMENDATIONS = 6;
   STEP_AGGREGATE = 7;
+  STEP_FETCH_WEBSITE = 8;     // runs between VALIDATE_INPUT and EXTRACT_COMPANY
 }
 
 enum StepState {
@@ -788,6 +814,20 @@ message ResultMeta {
   map<string, string> node_models = 1;  // step name (snake_case) → model actually used
   bool partial = 2; repeated string warnings = 3;
   uint32 duration_ms = 4; uint32 input_tokens = 5; uint32 output_tokens = 6;
+  WebsiteFetch website = 7;
+}
+
+enum WebsiteFetchStatus {
+  WEBSITE_FETCH_STATUS_UNSPECIFIED = 0;
+  WEBSITE_FETCH_STATUS_FETCHED = 1;
+  WEBSITE_FETCH_STATUS_NOT_PROVIDED = 2;
+  WEBSITE_FETCH_STATUS_DISABLED = 3;
+  WEBSITE_FETCH_STATUS_BLOCKED = 4;
+  WEBSITE_FETCH_STATUS_FAILED = 5;
+}
+message WebsiteFetch {
+  WebsiteFetchStatus status = 1;
+  string final_url = 2;       // empty unless FETCHED
 }
 ```
 
@@ -845,7 +885,8 @@ After the first event arrives, Go **does not** retry. LLM spend has already happ
 flowchart TD
     START([START]) --> V[validate_input<br/><i>deterministic</i>]
     V -- "invalid / insufficient" --> FAIL[fail<br/><i>deterministic</i>]
-    V -- ok --> E[extract_company<br/><i>LLM</i>]
+    V -- ok --> W[fetch_website<br/><i>HTTP, non-fatal</i>]
+    W --> E[extract_company<br/><i>LLM</i>]
     E -- "error after retries" --> FAIL
     E -- ok --> FIT[analyze_fit<br/><i>LLM</i>]
     E -- ok --> INT[analyze_intent<br/><i>LLM</i>]
@@ -861,7 +902,8 @@ flowchart TD
 | Node | Kind | Responsibility | On failure |
 |---|---|---|---|
 | `validate_input` | Pure | Trims and normalizes fields and the website domain. Requires `company_name` and **at least one** of `website`, `industry`, `notes`, `contact_title` (otherwise there's nothing to analyze). Enforces length limits again as defense in depth. | Sets `failure = INSUFFICIENT_DATA` or `INVALID_INPUT` and routes to `fail` |
-| `extract_company` | LLM | Produces `CompanyInsights` (industry, size estimate, business model, description, key needs, confidence) | Critical: routes to `fail` with `PROVIDER_ERROR` / `PROVIDER_CONFIG` |
+| `fetch_website` | I/O | Fetches the lead's homepage under the rules in §9.7 and stores its readable text in `website`. Reports `skipped` when there is no website or fetching is disabled. | Non-fatal: `website.status = blocked / failed`, warning appended, extraction continues from lead data |
+| `extract_company` | LLM | Produces `CompanyInsights` (industry, size estimate, business model, description, key needs, confidence) from lead data plus the website text when present | Critical: routes to `fail` with `PROVIDER_ERROR` / `PROVIDER_CONFIG` |
 | `analyze_fit` | LLM | Scores fit against the configured ICP (`ICP_DESCRIPTION`): score 0–100, matched criteria, gaps, rationale | Non-fatal: `fit = None`, warning appended |
 | `analyze_intent` | LLM | Scores buying intent from notes, contact seniority, and context: score 0–100, signals, rationale | Non-fatal: `intent = None`, warning appended |
 | `score_lead` | Pure | Combines sub-scores deterministically (§9.4). If both are missing, sets `failure`. | Routes to `fail` if both branches failed |
@@ -872,6 +914,7 @@ flowchart TD
 Workflow capabilities:
 
 - **Input validation:** `validate_input`, plus Pydantic on every LLM output.
+- **External grounding:** `fetch_website` (§9.7).
 - **Extraction:** `extract_company`.
 - **Parallelism:** two edges fan out from `extract_company`; `add_edge(["analyze_fit","analyze_intent"], "score_lead")` fans back in and waits for both.
 - **Conditional transitions:** three `add_conditional_edges` routers (after validate, extract, and score).
@@ -890,6 +933,7 @@ class AnalysisState(TypedDict, total=False):
     lead: LeadInput                       # pydantic model built from the proto
 
     # intermediate
+    website: WebsiteContent               # status, final_url, title, description, text (truncated)
     company: CompanyInsights | None
     fit: FitAnalysis | None
     intent: IntentAnalysis | None
@@ -914,6 +958,7 @@ The parallel branches write **different** keys (`fit`, `intent`), but both may a
   - `openai.AuthenticationError` / `NotFoundError` (bad model) → `PROVIDER_CONFIG`, non-retryable
   - Exhausted transient errors or parse errors → `PROVIDER_ERROR`, retryable
 - Critical node (`extract_company`) sets `failure`. Non-critical nodes append to `warnings`.
+- `fetch_website` never raises: every fetch error maps to a `WebsiteFetchStatus` and a user-safe warning (e.g. "Website could not be read; insights are inferred from lead data"). It has no retries: one timeout-bounded attempt, so a slow site cannot consume the job deadline.
 - Anything not caught (a bug) propagates to the servicer and becomes `AnalysisFailed{INTERNAL, retryable=true}` with the exception logged.
 
 ### 9.4 Deterministic scoring (`scoring.py`)
@@ -934,7 +979,7 @@ Weights and thresholds are module constants. Unit tests cover every branch and b
 ### 9.5 Progress reporting
 
 - A small decorator `@tracked(Step.ANALYZE_FIT)` wraps each node. Using LangGraph's `get_stream_writer()`, it emits `{"step", "state": "running"}` on entry and `done` / `failed` / `skipped` on exit.
-- The servicer runs `graph.astream(state, stream_mode=["custom", "values"])`. It maps `custom` chunks to `StepProgress` events and computes `percent` as completed steps / 7. The last `values` chunk is the final state, which becomes `completed` or `failed`.
+- The servicer runs `graph.astream(state, stream_mode=["custom", "values"])`. It maps `custom` chunks to `StepProgress` events and computes `percent` as completed steps / 8. The last `values` chunk is the final state, which becomes `completed` or `failed`.
 - Steps not reached because of routing (for example, everything after a validation failure) are reported as `skipped` in the terminal snapshot that Go writes.
 
 ### 9.6 LLM configuration
@@ -955,7 +1000,37 @@ Weights and thresholds are module constants. Unit tests cover every branch and b
   - Keep prompts and schemas compact (short field descriptions, at most 5 list items) so small models stay reliable.
 - **Startup check:** the service calls `GET {LLM_BASE_URL}/models` once at startup and logs a clear warning if the server is unreachable. It does not exit, so the LLM server can start later. The same call backs the `ListModels` RPC.
 - **There is no runtime fake mode.** `llm.for_node` reads an optional `configurable["llm_factory"]`, so tests inject LangChain's `GenericFakeChatModel` or stubs that raise errors (per node). Fakes exist only in test code.
-- **Prompt hygiene:** lead fields are untrusted user input. Prompts put them inside delimited blocks (`<lead_data>…</lead_data>`) and tell the model to treat them as data only. The model has **no tools**, and output must parse into a schema, so a prompt injection can at worst change the text of that one analysis.
+- **Prompt hygiene:** lead fields and website text are untrusted input. Prompts put them inside delimited blocks (`<lead_data>…</lead_data>`, `<website_content>…</website_content>`) and tell the model to treat them as data only. The model has **no tools**, and output must parse into a schema, so a prompt injection can at worst change the text of that one analysis.
+
+### 9.7 Website fetch (`web.py`)
+
+The `fetch_website` node grounds `extract_company` in what the company says about itself. It fetches **one page**, the URL in the lead's `website` field (normally the homepage). It does not crawl links.
+
+**Request rules (enforced on the initial URL and on every redirect hop):**
+
+| Rule | Value |
+|---|---|
+| Scheme and port | `http` / `https` only; ports 80 and 443 only |
+| Address guard (SSRF) | Resolve the host; reject if **any** resolved address is loopback, private, link-local, multicast, reserved or unspecified (`ipaddress` checks, IPv4 and IPv6). This blocks the compose network (`api`, `postgres`), the host, and cloud metadata endpoints. Result: `blocked`. |
+| Redirects | Followed manually, at most 3, each re-checked against the rules above |
+| `robots.txt` | Fetched first (same rules, 64 KB cap). If it disallows the path for our user agent: `blocked`. A missing or unreadable `robots.txt` allows the fetch. |
+| Timeout | `WEB_FETCH_TIMEOUT_SECONDS` (default 10s) for the whole fetch, including `robots.txt` and redirects |
+| Response | 2xx only; `Content-Type` must be `text/html` or `application/xhtml+xml`; body streamed and cut at 1 MB |
+| Identity | `User-Agent: LeadIntelBot/<version> (+<repository URL>)`. No cookies, no authentication, no JavaScript. |
+
+**Extraction:** stdlib `html.parser` collects `<title>`, `<meta name="description">` / `og:description`, and visible text, skipping `script`, `style`, `noscript`, `svg`, `template`, `nav`, and `footer`. Whitespace is collapsed and the text is truncated to `WEB_FETCH_MAX_CHARS` (default 6000) so prompts stay small enough for 7–8B local models. Fewer than 200 characters of text counts as `failed` (typical of client-rendered pages).
+
+**Data handling:** the fetched text exists only in graph state for the duration of the run. It is not returned to Go, stored, or logged (logs carry status, final host, byte count, and duration). `meta.website` records the outcome so the UI can label the insights.
+
+**Testability:** the node reads an optional `configurable["http_client"]` (an `httpx.AsyncClient`), mirroring `llm_factory`. Tests pass a client built on `httpx.MockTransport` that serves fixtures, so the real fetch code (guard, redirects, limits, extraction) runs offline. Address resolution is behind a small injectable resolver so tests can map fixture hosts to public or private addresses.
+
+**Fixtures (`ai/tests/fixtures/websites/`):**
+
+Both kinds use the same layout, `<name>/response.json` (requested URL, final URL, redirect chain, status, headers, `robots.txt` body, recording date) and `<name>/body.html`, and the same loader.
+
+- **Synthetic (committed, run in CI):** hand-written pages for fictional companies on reserved domains (`*.example`). They cover the happy path with realistic markup (navigation, footer, inline scripts and styles, `og:` tags) and the edge paths: redirect to a private address, redirect loop, `robots.txt` disallow, non-HTML content type, oversized body, client-rendered shell with almost no text, and a page containing prompt-injection text. They contain no third-party content, so the repository redistributes nothing (D12).
+- **Recorded (local only, git-ignored):** `ai/scripts/record_websites.py` fetches a short list of real company homepages **once** with the production fetcher and writes them to `ai/tests/fixtures/websites/recorded/`. It strips `<script>`, `<style>`, `<svg>` and comments before saving, to keep fixtures small. It is run by hand (`make record-websites`) when fixtures need refreshing, never by tests or CI. Tests marked `recorded` run over every recorded site and **skip** when the directory is empty, so a fresh clone and CI pass without them.
+- Locally recorded fixtures also back the lead set used for manual prompt evaluation (M4), so prompt changes can be compared against the same website content.
 
 ---
 
@@ -1028,7 +1103,7 @@ export function subscribeToAnalysis(qc: QueryClient, jobId: string): () => void 
 | `AnalysisPanel` | State machine view: *never analyzed* → CTA; *active* → `AnalysisProgress` + Cancel; *succeeded* → results; *failed* → error + Retry (if `retryable`). If `['config'].ai_configured` is false, the Analyze button is disabled with a hint: "AI not configured — ask an admin (/admin)". The result footer lists the models used per step (`meta.node_models`). |
 | `AnalysisProgress` | Vertical step list with per-step state icons. `analyze_fit` and `analyze_intent` sit side by side to show the parallelism. Includes a progress bar. |
 | `ScoreRing` | SVG ring (0–100) with tier color. GSAP count-up and stroke animation. |
-| `CompanyInsights`, `ScoreBreakdown`, `RecommendationList` | Result cards. "AI-inferred" label and confidence indicator. Partial-result warning banner. |
+| `CompanyInsights`, `ScoreBreakdown`, `RecommendationList` | Result cards. Source label from `meta.website`: "From website + AI" with the final host when `fetched`, otherwise "AI-inferred" plus a short reason ("no website", "website could not be read", "website disallows automated access"). Confidence indicator. Partial-result warning banner. |
 | `AnalysisHistory` | Last 5 jobs with status, score, timestamp. Clicking one shows that result. |
 | `AlertDialog`, `Toaster` (svelte-sonner) | Delete confirmation. Non-blocking success and error feedback. |
 
@@ -1104,6 +1179,7 @@ The form uses a zod schema (`schemas/llm-settings.ts`) that mirrors §7.5.
 | Python | LLM transient, exhausted | `provider_error` | true | "AI provider failed. Retry." |
 | Python | Auth rejected, or a configured model was removed from the LLM server | `provider_config` | false | "AI model configuration is invalid. An admin must update model settings." (shows the `/admin` link) |
 | Python | `models` in the request is missing or duplicates a node | `invalid_input` | false | Generic. This is a Go bug, logged at error level. |
+| Python | Website fetch blocked or failed | — (job continues) | — | Insights labeled "AI-inferred" with the reason (§10.4) |
 | Python | Unhandled exception | `internal` | true | Generic + Retry |
 | Go | Dispatch retries exhausted (`UNAVAILABLE`) | `ai_unavailable` | true | "Analysis service unavailable. Retry." |
 | Go | Deadline exceeded | `timeout` | true | "Analysis took too long. Retry." |
@@ -1124,6 +1200,7 @@ Rules:
 | **Python dies mid-run** | The Go stream returns `UNAVAILABLE` and the job is failed with `ai_unavailable`. SSE pushes `failed` and the user can retry. |
 | **Python down before dispatch** | Dispatch retries with backoff (§8.4), then fails the job with `ai_unavailable`. `/readyz` reports `ai: down`. |
 | **PostgreSQL down** | API returns `503`/`500`. pgxpool reconnects automatically. Workers log and back off. Compose `depends_on: service_healthy` handles startup ordering. |
+| **Lead website slow or down** | One attempt bounded by `WEB_FETCH_TIMEOUT_SECONDS` (10s), then the analysis continues from lead data with `meta.website.status = failed`. |
 | **LLM server slow or down** | Per-call timeout (60s) plus overall job deadline (180s). If the local server is down, the job fails with `provider_error` after the per-call retries, and the user can retry. |
 | **Browser disconnects from SSE** | No effect on the job. On reconnect, a snapshot restores state. |
 | **Graceful shutdown (SIGTERM)** | Go: stop accepting HTTP, stop claiming jobs, cancel in-flight jobs and mark them `interrupted`, drain up to 10s. Python: `server.stop(grace=10)`. |
@@ -1149,11 +1226,13 @@ Rules:
 | Admin token handling | Kept in `sessionStorage` (not `localStorage`), never logged, sent only over the same-origin `/api`. No `{@html}` anywhere limits XSS-based theft. | Short-lived sessions, CSRF protection once cookies are used |
 | Settings tampering | Saved models must exist on the LLM server. Temperatures are range-checked. Model names are passed to the LLM API as parameters, never put into prompts or shell commands. | — |
 | Secrets | With a local LLM there is usually no real key. If `LLM_API_KEY` is set, it exists **only** in the Python container env. `.env` is git-ignored and `.env.example` has placeholders. | Docker/K8s secrets, key rotation |
-| Data residency | Lead data goes only to the configured `LLM_BASE_URL`, which is local by default, so nothing leaves the machine | Document the implications if a hosted provider is configured |
+| Data residency | Lead data goes only to the configured `LLM_BASE_URL`, which is local by default. The website fetch sends **no lead data**: it is a plain `GET` of the lead's own URL. It does reveal to that site's operator that this machine requested the page. | Document the implications if a hosted provider is configured. Optional egress proxy for the fetch. |
+| Server-side request forgery | The website URL is user input fetched by the `ai` container. Scheme/port allowlist, public-address guard on every redirect hop, redirect cap, timeout, size cap, HTML-only (§9.7). Residual risk: DNS rebinding between the check and the connection. | Pin the connection to the checked address, or route fetches through an egress proxy that enforces the same policy |
+| Scraping etiquette and legal | One page per analysis, triggered by a user action, honors `robots.txt`, identifies itself with a descriptive `User-Agent`, no crawling, content not stored. `WEB_FETCH_ENABLED=false` turns it off entirely. | Per-domain rate limit if analyses are ever batched |
 | Network exposure | Only `web` (and `api` for dev) publish ports. `ai:50051` and `postgres` stay on the internal compose network. gRPC is plaintext inside it. | mTLS between services |
 | Input validation | Validated in the Go API (types, lengths, enums, URL and email format), again in Python (`validate_input`), and through DB `CHECK` constraints. 64 KB body limit, unknown fields rejected. | — |
 | SQL injection | Parameterized pgx queries only. Sort is an allowlisted enum, never interpolated. | — |
-| Prompt injection | Delimited untrusted input, no tools or function execution, schema-validated output, results rendered as **text** (no `{@html}`) | Output moderation, if results get shared |
+| Prompt injection | Lead fields **and website text** are delimited untrusted input. No tools or function execution, schema-validated output, results rendered as **text** (no `{@html}`). A synthetic fixture with injection text is part of the test suite. | Output moderation, if results get shared |
 | XSS | Svelte escapes by default. `{@html}` is forbidden (lint rule). CSP header in nginx: `default-src 'self'`, plus the Google Fonts origins. | — |
 | Abuse and cost | One active job per lead, bounded worker pool, per-call and per-job timeouts, no automatic workflow retries | Per-user rate limit and token budget |
 | Data minimization | `contact_email` is never sent to Python or the LLM | Configurable PII redaction |
@@ -1186,6 +1265,9 @@ Rules:
 | `LLM_MAX_ATTEMPTS` | ai | `3` | Per-call attempts |
 | `MAX_CONCURRENT_ANALYSES` | ai | `4` | gRPC concurrency cap |
 | `ICP_DESCRIPTION` | ai | *B2B SaaS, 50–1000 employees, …* | Ideal customer profile used by `analyze_fit` |
+| `WEB_FETCH_ENABLED` | ai | `true` | Fetch the lead's website (§9.7). `false` for offline use; results then report `disabled`. |
+| `WEB_FETCH_TIMEOUT_SECONDS` | ai | `10` | Whole-fetch budget, including `robots.txt` and redirects |
+| `WEB_FETCH_MAX_CHARS` | ai | `6000` | Website text passed to `extract_company` |
 
 Each service parses and validates its config at startup and **exits non-zero with a clear message** on invalid config.
 
@@ -1196,7 +1278,7 @@ Each service parses and validates its config at startup and **exits non-zero wit
 | Service | Image / build | Ports (host) | Depends on | Healthcheck |
 |---|---|---|---|---|
 | `postgres` | `postgres:17-alpine`, volume `pgdata` | `5432` (dev convenience) | — | `pg_isready` |
-| `ai` | `./ai` (python:3.12-slim + uv), `extra_hosts: ["host.docker.internal:host-gateway"]` (needed on Linux, harmless on macOS) | none (internal `50051`) | — | `python -m lead_ai.healthcheck` (grpc health) |
+| `ai` | `./ai` (python:3.12-slim + uv), `extra_hosts: ["host.docker.internal:host-gateway"]` (needed on Linux, harmless on macOS). Needs outbound internet access for the website fetch (default Docker networking provides it). | none (internal `50051`) | — | `python -m lead_ai.healthcheck` (grpc health) |
 | `api` | `./backend` (multi-stage → distroless static) | `8080` | `postgres: service_healthy`, `ai: service_healthy` | `GET /healthz` |
 | `web` | `./frontend` (node build → `nginx:alpine`) | `5173 → 80` | `api` | — |
 
@@ -1237,9 +1319,9 @@ Every milestone ends in a runnable, demonstrable state.
 | # | Milestone | Cumulative result |
 |---|---|---|
 | M1 | Lead CRUD vertical slice | Manage leads in a basic UI |
-| M2 | gRPC contract + happy-path workflow + job lifecycle | Real analyses run and persist (curl) |
+| M2 | gRPC contract + happy-path workflow (incl. website fetch) + job lifecycle | Real analyses, grounded in the lead's website, run and persist (curl) |
 | M3 | SSE + live analysis UI | **Full E2E slice with real AI** |
-| M4 | Workflow hardening | Graceful degradation, retries, error taxonomy |
+| M4 | Workflow hardening | Graceful degradation, retries, error taxonomy, website fetch edge cases |
 | M5 | Reliability: cancel, timeout, recovery | Failure-safe |
 | M6 | Superadmin model settings page | Per-node models configurable from the UI |
 | M7 | Premium UI and GSAP motion | Polished dashboard |
@@ -1289,12 +1371,13 @@ Every milestone ends in a runnable, demonstrable state.
 
 ### M2 — gRPC contract, happy-path workflow, job lifecycle
 
-**Goal:** `POST /api/leads/{id}/analyses` creates a job. A Go worker resolves the per-node models from `llm_node_settings` and dispatches the job over gRPC to the Python service, which runs the **full graph topology against your local LLM** (happy path only). The result is persisted. Settings are managed through the token-protected admin API with curl. No UI yet.
+**Goal:** `POST /api/leads/{id}/analyses` creates a job. A Go worker resolves the per-node models from `llm_node_settings` and dispatches the job over gRPC to the Python service, which runs the **full graph topology against your local LLM** (happy path only), including the fetch of the lead's website. The result is persisted. Settings are managed through the token-protected admin API with curl. No UI yet.
 
 **Files**
 - `buf.yaml`, `buf.gen.yaml`, `proto/leadintel/analysis/v1/analysis.proto`, generated code in `backend/gen/` and `ai/src/lead_ai/gen/`
 - `backend/migrations/{0002_analysis_jobs,0003_llm_node_settings}.sql`, `backend/internal/analysis/{model,store,worker,handler}.go`, `backend/internal/llmsettings/*`, `backend/internal/httpx/` (`RequireAdmin`), `backend/internal/aiclient/client.go`
-- `ai/pyproject.toml`, `ai/src/lead_ai/{main,config,server,errors}.py`, `ai/src/lead_ai/llm.py`, `ai/src/lead_ai/graph/{state,schemas,prompts,builder,nodes,scoring}.py`, `ai/Dockerfile`
+- `ai/pyproject.toml`, `ai/src/lead_ai/{main,config,server,errors}.py`, `ai/src/lead_ai/llm.py`, `ai/src/lead_ai/web.py`, `ai/src/lead_ai/graph/{state,schemas,prompts,builder,nodes,scoring}.py`, `ai/Dockerfile`
+- `ai/scripts/record_websites.py`, `ai/tests/fixtures/websites/` (synthetic happy-path fixtures), `Makefile` (`record-websites`), `.gitignore` (`ai/tests/fixtures/websites/recorded/`)
 - `docker-compose.yml` (+ `ai` service)
 
 **Tasks**
@@ -1304,6 +1387,9 @@ Every milestone ends in a runnable, demonstrable state.
    - `llm.py`: `for_node(config, node)` with a `(model, temperature)` client cache pointed at `LLM_BASE_URL`, `list_models()`, and the startup `/models` check.
    - Validate `models` in the request (4 LLM nodes, exactly once) and pass them via `configurable`.
    - Build the **full graph topology** (§9.1) with `build_graph()`. Use simple prompts and `with_structured_output` in every LLM node, plus deterministic `validate_input`, `score_lead`, `aggregate`. Record `meta.node_models`.
+   - `web.py` and the `fetch_website` node (§9.7): scheme/port allowlist, public-address guard on every hop, manual redirects (≤3), timeout, 1 MB cap, HTML-only, text extraction and truncation. `extract_company` receives the text in a `<website_content>` block. Record `meta.website`.
+   - Synthetic happy-path fixtures: 2–3 fictional company homepages with realistic markup (committed).
+   - `record_websites.py`: record 4–5 real homepages of contrasting companies locally (git-ignored; they also seed the M4 evaluation leads).
    - Emit progress via the stream writer. Add in-flight `job_id` dedupe.
 3. Go: jobs migration with the partial unique index. Store methods `Create` (catches `23505` and returns the existing job), `ClaimNext`, `UpdateProgress`, `Complete`, `Fail`, `Get`, `ListByLead`. The `Complete` transaction also updates `leads.ai_score/ai_tier/last_analyzed_at`.
 4. Go: worker pool (`ANALYSIS_WORKERS`) with wake channel and ticker. Dispatch through `aiclient` with a per-job deadline. Map events to the store. Dispatch retry on `UNAVAILABLE` before the first event.
@@ -1322,15 +1408,17 @@ Every milestone ends in a runnable, demonstrable state.
 - Before any settings are saved, triggering an analysis returns `409 ai_not_configured`, and `GET /api/config` returns `ai_configured: false`.
 - `/api/admin/*` without the token returns `401`. `GET /api/admin/llm-models` lists the local server's models. A `PUT` with a nonexistent model returns `422 unknown_model` naming the node.
 - After `PUT`ting a default model plus one override (e.g. a different model for `extract_company`), `curl -X POST /api/leads/{id}/analyses` returns `202`. Repeating it while active returns `200` with the **same** job ID.
-- For a realistic lead, `GET /api/analyses/{id}` shows `succeeded` within `ANALYSIS_TIMEOUT`, with a schema-valid `result` and all steps `done`. The lead's `ai_score` is set, and the score matches the deterministic formula applied to the sub-scores.
+- For a realistic lead with a reachable website, `GET /api/analyses/{id}` shows `succeeded` within `ANALYSIS_TIMEOUT`, with a schema-valid `result`, all steps `done`, and `meta.website.status = fetched`. The lead's `ai_score` is set, and the score matches the deterministic formula applied to the sub-scores.
+- The same lead without a website succeeds with `fetch_website` `skipped` and `meta.website.status = not_provided`. A lead whose website is `http://localhost:8080` or `http://api:8080` succeeds with `blocked`, and no request reaches that address.
 - The job's `model_config` and `result.meta.node_models` both show the override for `extract_company` and the default for the other three nodes. Changing settings afterwards does not change the stored job.
-- A lead with only `company_name` gives `failed / insufficient_data / retryable=false` **without any LLM call**, and the later steps show as `skipped`.
+- A lead with only `company_name` gives `failed / insufficient_data / retryable=false` **without any LLM call or website fetch**, and the later steps show as `skipped`.
 - With `ai` stopped, a triggered job ends `failed / ai_unavailable / retryable=true` after ~7s of retries.
 
 **Verify**
 - `uv run pytest`:
   - `test_scoring.py`: all branches and boundaries.
-  - `test_graph.py`: happy path and insufficient data, with `GenericFakeChatModel` injected.
+  - `test_web.py` (offline, fixtures through `httpx.MockTransport`): text extraction for every synthetic happy-path fixture and, when present locally, every recorded site (title, description, non-empty text within `WEB_FETCH_MAX_CHARS`, no script/style content); address guard rejects loopback, private, link-local and IPv6-local addresses, including on a redirect hop.
+  - `test_graph.py`: happy path (with a synthetic website fixture; the recording fake asserts the `extract_company` prompt contains the website text) and insufficient data, with `GenericFakeChatModel` injected.
   - `test_graph.py` also checks per-node routing: a recording fake factory sees the configured model for each node.
   - `test_server.py`: event ordering, single terminal event, duplicate job → `ALREADY_EXISTS`, missing or duplicate `models` entry → `INVALID_INPUT`.
 - `go test ./internal/analysis/...`: worker with a fake `Analyzer` (success, domain failure, transport failure before and after the first event); store test for the dedupe index.
@@ -1367,6 +1455,7 @@ Every milestone ends in a runnable, demonstrable state.
 **Verify**
 - `go test`: broker unit tests (fan-out, unsubscribe, slow subscriber dropped). SSE handler test with `httptest` (event order for terminal job).
 - `curl -N localhost:8080/api/analyses/{id}/events` shows a well-formed event stream.
+- The insights card shows "From website + AI" with the host for a fetched site, and "AI-inferred" with the reason otherwise.
 - Manual two-tab test and refresh-mid-run test.
 
 ---
@@ -1376,13 +1465,16 @@ Every milestone ends in a runnable, demonstrable state.
 **Goal:** The workflow handles unreliable LLM behavior (slow responses, malformed JSON, server down) as specified in §8.4 and §9.3.
 
 **Files**
-- `ai/src/lead_ai/llm.py`, `graph/prompts.py`, `graph/nodes.py`, `errors.py`, `config.py`
+- `ai/src/lead_ai/llm.py`, `web.py`, `graph/prompts.py`, `graph/nodes.py`, `errors.py`, `config.py`
+- `ai/tests/fixtures/websites/` (synthetic edge-case fixtures)
 
 **Tasks**
 1. `llm.py`: per-node `ChatOpenAI` with `max_retries=0`. A `structured(llm, schema)` helper combines `with_structured_output(schema, method=LLM_STRUCTURED_OUTPUT_METHOD, include_raw=True)` with `.with_retry(...)`. Token usage is read from the raw message when the server reports it.
 2. Tighten prompts for small local models (compact schemas, explicit JSON-only instructions, delimited untrusted input).
 3. Node error classification (§9.3). Graceful degradation for non-critical nodes. Fill `meta` (node models, tokens, duration, warnings).
-4. Validate config at startup: `LLM_BASE_URL` is required. Run the `/models` reachability check (§9.6).
+4. Validate config at startup: `LLM_BASE_URL` is required, `WEB_FETCH_*` values are in range. Run the `/models` reachability check (§9.6).
+5. Website fetch hardening (§9.7): `robots.txt` handling, content-type and minimum-text checks, mapping every fetch error to a `WebsiteFetchStatus` and a user-safe warning, and the whole-fetch timeout budget. Add the synthetic edge-case fixtures.
+6. Prompt for `extract_company`: prefer website statements over model knowledge when they conflict, raise `confidence` only when the website corroborates the lead data, and ignore instructions inside `<website_content>`.
 
 **Dependencies:** M2 (M3 for the visual check).
 
@@ -1390,7 +1482,8 @@ Every milestone ends in a runnable, demonstrable state.
 - Stopping the local LLM server mid-analysis gives `provider_error / retryable=true` after `LLM_MAX_ATTEMPTS` attempts (visible in logs), not a hang.
 - A model removed from the LLM server after it was saved in settings (e.g. `ollama rm`) gives `failed / provider_config / retryable=false` without retry loops (one attempt in logs). The UI points to `/admin`.
 - When one parallel branch fails (simulated in tests), the job still succeeds with `meta.partial = true` and a warning banner in the UI.
-- Results from 3 contrasting leads (strong ICP fit, poor fit, sparse data) are schema-valid, and their scores are ordered sensibly.
+- Results from 3 contrasting leads (strong ICP fit, poor fit, sparse data) are schema-valid, and their scores are ordered sensibly. Run with website fetch on and off, the fetched variant gives a more specific `company.description` and `key_needs`.
+- Every synthetic website fixture ends with the expected `meta.website.status`, the job still succeeds, and the fetch never exceeds `WEB_FETCH_TIMEOUT_SECONDS`. The prompt-injection fixture does not change the output schema or leak instructions into recommendations.
 
 **Verify**
 - `uv run pytest`: graph tests with `GenericFakeChatModel` and stubs that:
@@ -1398,7 +1491,8 @@ Every milestone ends in a runnable, demonstrable state.
   - raise `AuthenticationError` / `NotFoundError` (no retry);
   - fail one branch (`partial=true`);
   - fail both branches (job fails).
-- Manual: the 3-lead comparison, and stopping and starting the LLM server mid-run.
+- `uv run pytest tests/test_web.py`: one table-driven case per synthetic fixture (redirect to private address, redirect loop, `robots.txt` disallow, non-HTML, oversized body, client-rendered shell, slow response against the timeout), each asserting the status and that no disallowed request was made.
+- Manual: the 3-lead comparison (website fetch on and off), and stopping and starting the LLM server mid-run.
 
 ---
 
@@ -1501,7 +1595,7 @@ Every milestone ends in a runnable, demonstrable state.
 **Tasks**
 1. Multi-stage Dockerfiles (non-root users, small images).
 2. Compose health-based ordering. Internal-only `ai`. Nginx SSE-safe proxy and CSP.
-3. README: quick start (local LLM setup, e.g. Ollama with a recommended model), architecture link to this spec, curl examples, troubleshooting (reaching the host LLM from Docker, structured-output method fallback).
+3. README: quick start (local LLM setup, e.g. Ollama with a recommended model), architecture link to this spec, curl examples, troubleshooting (reaching the host LLM from Docker, structured-output method fallback, running offline with `WEB_FETCH_ENABLED=false`). Document what the website fetch does and does not do (§9.7, §12), and how to record real-site fixtures locally.
 
 **Dependencies:** M1–M7.
 
@@ -1592,6 +1686,8 @@ Every milestone ends in a runnable, demonstrable state.
 | TanStack Query for server state | Hand-written runes stores | Caching, invalidation, optimistic mutations, and loading/error states come built in. SSE events feed the same cache, so there is one source of truth. |
 | Tailwind v4 + shadcn-svelte | Hand-written CSS, a heavyweight component library | Fast path to a premium look. Accessible primitives (bits-ui) for dialogs, sheets, and selects. Components are copied in, so they are fully customizable with no dependency on the library's styling. |
 | Real local LLM in dev, fakes only in unit tests | Runtime fake mode | One code path. A local model costs nothing to run, and LLM-factory injection via `configurable` keeps tests deterministic. |
+| Fetch the lead's homepage in the AI service, one page, no JavaScript (D4) | LLM inference from lead data only; third-party enrichment APIs; headless-browser crawling | Grounds company insights in the company's own description at the cost of one bounded HTTP request. The AI service already makes outbound calls and owns all inputs to the prompts, and Go stays free of untrusted outbound traffic. Third-party APIs add keys and cost; a headless browser adds a large dependency and attack surface. |
+| Website fixtures replayed through `httpx.MockTransport`: synthetic pages committed, real-site recordings local only (D12) | Live requests in tests; committing recorded third-party pages; a VCR-style cassette library | Tests stay offline and deterministic, and the real fetch code runs in CI against realistic markup. The repository redistributes no third-party content. Real-site recordings use the production fetcher and add coverage locally without being required. No extra test dependency. |
 | Per-node models as **DB settings, edited in `/admin`**, sent with each request | Env vars per node; Python reads settings itself; Python pulls config from Go | Changes need no restart or redeploy. Go stays the single owner of persisted state. Python stays stateless and needs no cache invalidation. Each job records exactly which models produced it. |
 | Validate models against the live `/models` list on save | Accept any string | A typo would otherwise break every later analysis. Failing at save time gives immediate feedback in the form. |
 | Static `ADMIN_TOKEN` for superadmin | Full user and role system | Real protection for the only privileged surface at a fraction of the complexity of full auth. The upgrade path is a `role` column plus sessions (D3). |
@@ -1606,7 +1702,8 @@ Every milestone ends in a runnable, demonstrable state.
 | D1 | Go ↔ Python result delivery | **Server-streaming RPC** (§8.2) | Unary start + Python → Go callback service (survives Go restarts, more moving parts) |
 | D2 | Router choice | **SvelteKit in SPA mode** (standard, typed routes) | Plain Vite + a router library such as `sv-router` (closer to "just Vite", but less mainstream) |
 | D3 | Authentication / superadmin identity | **No user accounts. Superadmin = holder of `ADMIN_TOKEN`** (bearer token, entered once per tab) | Real users with roles and session login: needed if more than one person uses it or admin actions must be attributable |
-| D4 | Company insights source | **LLM inference from lead data only**, labeled "AI-inferred" | Add a web-fetch node for the lead's website (+ scraping concerns, latency) |
+| D4 | Company insights source | **Decided:** fetch the lead's homepage in a `fetch_website` node and ground `extract_company` in it (§9.7); fall back to lead data, labeled "AI-inferred", when there is no website or the fetch is blocked or fails | (Rejected) LLM inference from lead data only |
+| D12 | Recorded website fixtures in a public repository | **Decided:** commit only synthetic HTML (fictional companies, `*.example` domains). Real-site recordings stay local in a git-ignored directory; tests over them skip when absent (§9.7). The repository redistributes no third-party page content; CI loses real-world markup coverage. | (Rejected) Commit trimmed snapshots of real company homepages |
 | D5 | Local LLM server | **You provide `LLM_BASE_URL`. Models are chosen in `/admin`.** Prefer instruction-tuned models of 7B+ with good JSON adherence (e.g. Qwen 2.5/3 or Llama 3.x class). | Which server you use (Ollama, LM Studio, vLLM) decides whether `json_schema` works or `json_mode` is needed. Confirm this during M2. |
 | D10 | What is configurable per node | **Model + temperature** | Also the structured-output method per node (useful if models differ in JSON support), or the endpoint/provider per node (mixing local and hosted models; needs a providers table and secret handling) |
 | D11 | Behavior when no default model is set | **Block analysis (`409 ai_not_configured`)** and guide the user to `/admin` | Optional env `LLM_BOOTSTRAP_MODEL` that seeds the default on first start, for unattended setups |
